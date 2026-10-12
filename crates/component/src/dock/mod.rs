@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn every_base_dock_export_is_reachable_from_here() {
-        let base = include_str!("../../../base/src/dock/mod.rs");
+        let base = include_str!("../../tests/fixtures/base-dock.rs");
         let skin = include_str!("mod.rs");
 
         let exported = exported_names(base, "pub use ");

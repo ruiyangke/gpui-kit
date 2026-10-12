@@ -244,7 +244,7 @@ mod tests {
     use super::*;
     use gpui::{px, size};
 
-    const SVG: &[u8] = include_bytes!("../../assets/assets/icons/arrow-up.svg");
+    const SVG: &[u8] = include_bytes!("../tests/fixtures/arrow-up.svg");
 
     #[test]
     fn test_icon_builder_preserves_owned_data_and_transform_on_clone() {

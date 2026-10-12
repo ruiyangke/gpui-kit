@@ -40,6 +40,8 @@ pub struct Pagination {
     id: ElementId,
     style: StyleRefinement,
     size: Size,
+    item_style: StyleRefinement,
+    content_style: Option<(StyleRefinement, Size)>,
     current_page: usize,
     total_pages: usize,
     disabled: bool,
@@ -55,6 +57,8 @@ impl Pagination {
             id: id.into(),
             style: StyleRefinement::default(),
             size: Size::default(),
+            item_style: StyleRefinement::default(),
+            content_style: None,
             current_page: 1,
             total_pages: 1,
             visible_pages: 5,
@@ -62,6 +66,26 @@ impl Pagination {
             compact: false,
             on_click: None,
         }
+    }
+
+    /// Style every page and navigation button without changing pagination behavior.
+    pub fn item_style(mut self, style: StyleRefinement) -> Self {
+        self.item_style = style;
+        self
+    }
+
+    /// Style labels and icons independently from the item hit targets.
+    pub fn content_style(mut self, style: StyleRefinement, icon_size: Size) -> Self {
+        self.content_style = Some((style, icon_size));
+        self
+    }
+
+    fn style_button(&self, button: Button) -> Button {
+        button
+            .refine_style(&self.item_style)
+            .when_some(self.content_style.clone(), |button, (style, size)| {
+                button.content_style(style, size)
+            })
     }
 
     /// Set the current page number (1-based).
@@ -128,9 +152,11 @@ impl Pagination {
         };
 
         Button::new(id)
+            .accessibility_label(label.clone())
             .ghost()
             .compact()
             .with_size(self.size)
+            .map(|button| self.style_button(button))
             .disabled(target_page.is_none())
             .tooltip(label.clone())
             .when(self.compact, |this| this.icon(icon.clone()))
@@ -142,7 +168,12 @@ impl Pagination {
                         .flex_nowrap()
                         .when(is_prev, |this| this.flex_row_reverse())
                         .child(SharedString::from(label))
-                        .child(Icon::new(icon)),
+                        .child(
+                            Icon::new(icon)
+                                .when_some(self.content_style.as_ref(), |icon, (_, size)| {
+                                    icon.with_size(*size)
+                                }),
+                        ),
                 )
             })
             .when_some(
@@ -206,6 +237,7 @@ impl RenderOnce for Pagination {
 
                         Button::new(page)
                             .with_size(self.size)
+                            .map(|button| self.style_button(button))
                             .map(|this| {
                                 if is_selected {
                                     this.outline()
@@ -228,8 +260,14 @@ impl RenderOnce for Pagination {
                         "ellipsis-{}-{}",
                         range.start, range.end
                     )))
+                    .accessibility_label(format!(
+                        "Choose page {} through {}",
+                        range.start,
+                        range.end.saturating_sub(1)
+                    ))
                     .ghost()
                     .with_size(self.size)
+                    .map(|button| self.style_button(button))
                     .compact()
                     .disabled(self.disabled)
                     .icon(IconName::Ellipsis)

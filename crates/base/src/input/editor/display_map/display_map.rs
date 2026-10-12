@@ -241,6 +241,11 @@ impl DisplayMap {
     }
 
     /// Set the wrapping indent for continuation lines.
+    pub fn set_tab_size(&mut self, tab_size: usize, cx: &mut App) {
+        self.wrap_map.set_tab_size(tab_size, cx);
+        self.rebuild_fold_projection();
+    }
+
     pub fn set_wrapping_indent(&mut self, wrapping_indent: WrappingIndent, cx: &mut App) {
         self.wrap_map.set_wrapping_indent(wrapping_indent, cx);
         self.rebuild_fold_projection();

@@ -10,9 +10,9 @@ use crate::{
     tooltip::{ManagedTooltipExt as _, Tooltip},
 };
 use gpui::{
-    AnyElement, App, Background, ClickEvent, Corners, Edges, ElementId, Hsla, InteractiveElement,
-    Interactivity, IntoElement, MouseButton, ParentElement, Pixels, RenderOnce, Role, SharedString,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
+    AnyElement, App, Background, ClickEvent, Corners, Edges, ElementId, FocusHandle, Hsla,
+    InteractiveElement, Interactivity, IntoElement, MouseButton, ParentElement, Pixels, RenderOnce,
+    Role, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder as _, relative, transparent_white,
 };
 
@@ -201,6 +201,7 @@ pub struct Button {
     /// as it is open. Kept apart from `selected` because the two states mean
     /// different things, even though they paint the same today.
     open: bool,
+    menu_trigger: bool,
     toggled: Option<bool>,
     role: RoleOverride,
     variant: ButtonVariant,
@@ -227,6 +228,7 @@ pub struct Button {
     loading: bool,
     loading_icon: Option<Icon>,
     focus_ring_enabled: bool,
+    provided_focus_handle: Option<FocusHandle>,
 
     tab_index: isize,
     tab_stop: bool,
@@ -252,6 +254,7 @@ impl Button {
             disabled: false,
             selected: false,
             open: false,
+            menu_trigger: false,
             toggled: None,
             role: RoleOverride::default(),
             variant: ButtonVariant::default(),
@@ -272,6 +275,7 @@ impl Button {
             tooltip_builder: None,
             on_click: None,
             focus_ring_enabled: true,
+            provided_focus_handle: None,
             on_hover: None,
             loading: false,
             compact: false,
@@ -300,9 +304,9 @@ impl Button {
         self.compact
     }
 
-    /// Presentation supplied by a styled compound control. Standalone buttons
-    /// retain their normal size-derived content style.
-    pub(crate) fn content_style(mut self, style: StyleRefinement, icon_size: Size) -> Self {
+    /// Override the inner label presentation and icon size independently of
+    /// the hit target. Without this, the normal size-derived style is retained.
+    pub fn content_style(mut self, style: StyleRefinement, icon_size: Size) -> Self {
         self.content_style = style;
         self.icon_size = Some(icon_size);
         self
@@ -395,6 +399,12 @@ impl Button {
         self
     }
 
+    /// Expose the state of a disclosure without changing selected or open styling.
+    pub fn expanded(mut self, expanded: bool) -> Self {
+        self.base = self.base.aria_expanded(expanded);
+        self
+    }
+
     /// Set the icon of the button, if the Button have no label, the button well in Icon Button mode.
     pub fn icon(mut self, icon: impl Into<ButtonIcon>) -> Self {
         self.icon = Some(icon.into());
@@ -453,12 +463,37 @@ impl Button {
         self
     }
 
+    /// Uses a caller-owned focus handle instead of creating keyed state.
+    pub fn track_focus(mut self, handle: &FocusHandle) -> Self {
+        self.provided_focus_handle = Some(handle.clone());
+        self
+    }
+
     /// Add click handler.
     pub fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_click = Some(Rc::new(handler));
+        self
+    }
+
+    /// The popover owns mouse-down and keyboard opening. A click listener on
+    /// its existing trigger also exposes AXPress through GPUI's mouse fallback;
+    /// the no-op cannot toggle the popover a second time on mouse-up.
+    pub(crate) fn menu_trigger(mut self, expanded: bool) -> Self {
+        self.menu_trigger = true;
+        self.base = self.base.aria_expanded(expanded);
+        // Append to the underlying listener list; don't replace a handler
+        // supplied through either this facade or `with_base`.
+        self.base.interactivity().on_click(|_, _, _| {});
+        if !self.interactive() {
+            // Popover opens on a Confirm action at key-down, before Button's
+            // normal loading click guard at key-up. Contain that action here.
+            self.base = self
+                .base
+                .on_action(|_: &gpui_base::actions::Confirm, _, cx| cx.stop_propagation());
+        }
         self
     }
 
@@ -613,6 +648,7 @@ impl RenderOnce for Button {
         let disabled = self.disabled;
         let selected = self.shows_selected_style();
         let loading = self.loading;
+        let menu_trigger = self.menu_trigger;
         let tooltip_placement = self.tooltip_placement;
         let tooltip_show_delay = self.tooltip_show_delay;
         let hover_group = self.hover_group;
@@ -637,10 +673,12 @@ impl RenderOnce for Button {
             FocusLine::Inside(normal_style.fg.opacity(FOCUS_LINE_OPACITY))
         };
 
-        let focus_handle = window
-            .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
-            .read(cx)
-            .clone();
+        let focus_handle = self.provided_focus_handle.unwrap_or_else(|| {
+            window
+                .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+                .read(cx)
+                .clone()
+        });
         let is_focused = focus_handle.is_focused(window);
 
         let rounding = match self.rounded {
@@ -785,116 +823,203 @@ impl RenderOnce for Button {
                 this.when(has_content, |this| this.justify_between())
                     .child(Caret::new(self.size).text_color(normal_style.fg.opacity(0.75)))
             });
-        root.role(self.role.resolve(|| {
-            if self.variant.is_link() {
-                Role::Link
-            } else {
-                Role::Button
-            }
-        }))
-        .selected(selected)
-        .disabled(disabled)
-        // Base layers semantic states over the builder chain, so the caller's
-        // own style is replayed inside each state to keep it the closest layer.
-        .styles(|styles| {
-            styles
-                .selected(|style| {
-                    style
-                        .bg(selected_style.bg)
-                        .border_color(selected_style.border)
-                        .text_color(selected_style.fg)
-                        .refine_style(&instance_style)
-                })
-                .disabled(|style| {
-                    style
-                        .bg(disabled_style.bg)
-                        .text_color(disabled_style.fg)
-                        .border_color(disabled_style.border)
-                        .shadow_none()
-                        .refine_style(&instance_style)
-                })
-        })
-        .when_some(accessibility_label, |this, label| {
-            this.accessibility_label(label)
-        })
-        .when_some(self.toggled, |this, toggled| {
-            this.aria_toggled(if toggled {
-                gpui::accesskit::Toggled::True
-            } else {
-                gpui::accesskit::Toggled::False
-            })
-        })
-        .track_focus(&focus_handle)
-        .tab_index(self.tab_index)
-        .tab_stop(self.tab_stop)
-        .child(content)
-        // Fade the whole button while loading, so every variant is dimmed by
-        // the same amount. Fading `bg`, `border` and `fg` one by one instead
-        // only shows up on variants that have a background to begin with:
-        // `Ghost`, `Link` and `Text` are transparent, so an alpha on their
-        // background changes nothing.
-        .when(loading && !disabled, |this| this.opacity(0.8))
-        .when(!disabled, |this| {
-            this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                if loading {
-                    cx.stop_propagation();
-                    return;
+        let root = root
+            .role(self.role.resolve(|| {
+                if self.variant.is_link() {
+                    Role::Link
+                } else {
+                    Role::Button
                 }
-
-                // Avoid focus on mouse down.
-                window.prevent_default();
-
-                // Pressing a button must not start the window-level text selection.
-                crate::global_state::GlobalState::suppress_text_selection(cx);
+            }))
+            .selected(selected)
+            .disabled(disabled)
+            // Base layers semantic states over the builder chain, so the caller's
+            // own style is replayed inside each state to keep it the closest layer.
+            .styles(|styles| {
+                styles
+                    .selected(|style| {
+                        style
+                            .bg(selected_style.bg)
+                            .border_color(selected_style.border)
+                            .text_color(selected_style.fg)
+                            .refine_style(&instance_style)
+                    })
+                    .disabled(|style| {
+                        style
+                            .bg(disabled_style.bg)
+                            .text_color(disabled_style.fg)
+                            .border_color(disabled_style.border)
+                            .shadow_none()
+                            .refine_style(&instance_style)
+                    })
             })
-        })
-        .when_some(self.on_click, |this, on_click| {
-            this.on_click(move |event, window, cx| {
-                if loading {
-                    cx.stop_propagation();
-                    return;
+            .when_some(accessibility_label, |this, label| {
+                this.accessibility_label(label)
+            })
+            .when_some(self.toggled, |this, toggled| {
+                this.aria_toggled(if toggled {
+                    gpui::accesskit::Toggled::True
+                } else {
+                    gpui::accesskit::Toggled::False
+                })
+            })
+            .track_focus(&focus_handle)
+            .tab_index(self.tab_index)
+            .tab_stop(self.tab_stop)
+            .child(content)
+            // Fade the whole button while loading, so every variant is dimmed by
+            // the same amount. Fading `bg`, `border` and `fg` one by one instead
+            // only shows up on variants that have a background to begin with:
+            // `Ghost`, `Link` and `Text` are transparent, so an alpha on their
+            // background changes nothing.
+            .when(loading && !disabled, |this| this.opacity(0.8))
+            .when(!disabled, |this| {
+                this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    if loading {
+                        cx.stop_propagation();
+                        return;
+                    }
+
+                    // Avoid focus on mouse down.
+                    window.prevent_default();
+
+                    // Pressing a button must not start the window-level text selection.
+                    crate::global_state::GlobalState::suppress_text_selection(cx);
+                })
+            })
+            .when_some(self.on_click, |this, on_click| {
+                this.on_click(move |event, window, cx| {
+                    if loading {
+                        cx.stop_propagation();
+                        return;
+                    }
+
+                    on_click(event, window, cx);
+                })
+            })
+            .when(loading, |this| {
+                this.on_click(|_, _, cx| cx.stop_propagation())
+            })
+            .when_some(self.on_hover.filter(|_| hoverable), |this, on_hover| {
+                this.on_hover(move |hovered, window, cx| {
+                    on_hover(hovered, window, cx);
+                })
+            })
+            .map(|this| {
+                if let Some(builder) = self.tooltip_builder {
+                    this.managed_tooltip_with(
+                        tooltip_placement,
+                        tooltip_show_delay,
+                        move |window, cx| builder(window, cx),
+                    )
+                } else if let Some((tooltip, action)) = self.tooltip {
+                    this.managed_tooltip_with(
+                        tooltip_placement,
+                        tooltip_show_delay,
+                        move |window, cx| {
+                            Tooltip::new(tooltip.clone())
+                                .when_some(action.clone(), |this, (action, context)| {
+                                    this.action(
+                                        action.boxed_clone().as_ref(),
+                                        context.as_ref().map(|c| c.as_ref()),
+                                    )
+                                })
+                                .build(window, cx)
+                        },
+                    )
+                } else {
+                    this
                 }
+            })
+            .when(is_focused && self.focus_ring_enabled, |this| {
+                focus_style(this, focus_line, window, cx)
+            });
+        ButtonSemantics {
+            inner: root.render(window, cx).into_element(),
+            disabled: disabled || (menu_trigger && loading),
+            menu_trigger,
+        }
+    }
+}
 
-                on_click(event, window, cx);
-            })
-        })
-        .when(loading, |this| {
-            this.on_click(|_, _, cx| cx.stop_propagation())
-        })
-        .when_some(self.on_hover.filter(|_| hoverable), |this, on_hover| {
-            this.on_hover(move |hovered, window, cx| {
-                on_hover(hovered, window, cx);
-            })
-        })
-        .map(|this| {
-            if let Some(builder) = self.tooltip_builder {
-                this.managed_tooltip_with(
-                    tooltip_placement,
-                    tooltip_show_delay,
-                    move |window, cx| builder(window, cx),
-                )
-            } else if let Some((tooltip, action)) = self.tooltip {
-                this.managed_tooltip_with(
-                    tooltip_placement,
-                    tooltip_show_delay,
-                    move |window, cx| {
-                        Tooltip::new(tooltip.clone())
-                            .when_some(action.clone(), |this, (action, context)| {
-                                this.action(
-                                    action.boxed_clone().as_ref(),
-                                    context.as_ref().map(|c| c.as_ref()),
-                                )
-                            })
-                            .build(window, cx)
-                    },
-                )
-            } else {
-                this
-            }
-        })
-        .when(is_focused && self.focus_ring_enabled, |this| {
-            focus_style(this, focus_line, window, cx)
-        })
+/// Amend the existing element, retaining its identity and interaction hooks.
+/// This adds no wrapping accessibility node or additional focus stop.
+struct ButtonSemantics<E: gpui::Element> {
+    inner: E,
+    disabled: bool,
+    menu_trigger: bool,
+}
+
+impl<E: gpui::Element> IntoElement for ButtonSemantics<E> {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl<E: gpui::Element> gpui::Element for ButtonSemantics<E> {
+    type RequestLayoutState = E::RequestLayoutState;
+    type PrepaintState = E::PrepaintState;
+
+    fn id(&self) -> Option<ElementId> {
+        self.inner.id()
+    }
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        self.inner.source_location()
+    }
+    fn request_layout(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
+        self.inner.request_layout(id, inspector, window, cx)
+    }
+    fn prepaint(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<Pixels>,
+        layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        self.inner
+            .prepaint(id, inspector, bounds, layout, window, cx)
+    }
+    fn paint(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<Pixels>,
+        layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.inner
+            .paint(id, inspector, bounds, layout, prepaint, window, cx)
+    }
+    fn a11y_role(&self) -> Option<Role> {
+        self.inner.a11y_role()
+    }
+    fn write_a11y_info(&self, node: &mut gpui::accesskit::Node) {
+        self.inner.write_a11y_info(node);
+        if self.disabled {
+            node.set_disabled();
+            node.remove_action(gpui::accesskit::Action::Click);
+        }
+        if self.menu_trigger {
+            node.set_has_popup(gpui::accesskit::HasPopup::Menu);
+        }
+    }
+    fn a11y_synthetic_children(
+        &mut self,
+        prepaint: &mut Self::PrepaintState,
+        builder: &mut gpui::A11ySubtreeBuilder,
+    ) {
+        self.inner.a11y_synthetic_children(prepaint, builder);
     }
 }
 
@@ -1410,6 +1535,113 @@ mod tests {
     }
 
     #[gpui::test]
+    fn disclosure_state_forwards_to_the_base_accessibility_node(cx: &mut gpui::TestAppContext) {
+        use gpui::{Context, Element as _, Render, accesskit, canvas};
+        use std::sync::{Arc, Mutex};
+
+        struct Probe(Arc<Mutex<Vec<accesskit::Node>>>);
+        impl Render for Probe {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let captured = self.0.clone();
+                canvas(
+                    move |_, window, cx| {
+                        let mut captured = captured.lock().unwrap();
+                        captured.clear();
+                        for button in [
+                            Button::new("ordinary"),
+                            Button::new("collapsed").expanded(false),
+                            Button::new("expanded").expanded(true),
+                        ] {
+                            let mut node = accesskit::Node::new(Role::Button);
+                            button
+                                .base
+                                .render(window, cx)
+                                .into_element()
+                                .write_a11y_info(&mut node);
+                            captured.push(node);
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+            }
+        }
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let result = captured.clone();
+        let (_, cx) = cx.add_window_view(move |_, _| Probe(captured));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let nodes = result.lock().unwrap();
+        assert_eq!(nodes[0].is_expanded(), None);
+        assert_eq!(nodes[1].is_expanded(), Some(false));
+        assert_eq!(nodes[2].is_expanded(), Some(true));
+    }
+
+    #[gpui::test]
+    fn menu_trigger_exposes_click_expansion_and_popup_on_its_existing_node(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::{Element as _, Render, accesskit, canvas};
+        use std::sync::{Arc, Mutex};
+
+        struct Probe(Arc<Mutex<Vec<accesskit::Node>>>);
+        impl Render for Probe {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                let captured = self.0.clone();
+                canvas(
+                    move |_, window, cx| {
+                        let mut captured = captured.lock().unwrap();
+                        captured.clear();
+                        for (expanded, disabled, loading) in [
+                            (false, false, false),
+                            (true, false, false),
+                            (false, true, false),
+                            (false, false, true),
+                        ] {
+                            let element = Button::new("menu-trigger")
+                                .accessibility_label("More actions")
+                                .disabled(disabled)
+                                .loading(loading)
+                                .menu_trigger(expanded)
+                                .render(window, cx)
+                                .into_element();
+                            // These are the outer Element hooks consumed by
+                            // GPUI, including the semantic forwarding adapter.
+                            assert_eq!(element.id(), Some("menu-trigger".into()));
+                            assert_eq!(element.a11y_role(), Some(Role::Button));
+                            let mut node = accesskit::Node::new(Role::Button);
+                            element.write_a11y_info(&mut node);
+                            captured.push(node);
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+            }
+        }
+
+        cx.update(crate::init);
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let result = captured.clone();
+        let (_, cx) = cx.add_window_view(move |_, _| Probe(captured));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let nodes = result.lock().unwrap();
+        assert_eq!(nodes.len(), 4);
+        for (index, node) in nodes.iter().enumerate() {
+            assert_eq!(node.label(), Some("More actions"));
+            assert_eq!(node.has_popup(), Some(accesskit::HasPopup::Menu));
+            assert_eq!(node.is_expanded(), Some(index == 1));
+            assert_eq!(node.supports_action(accesskit::Action::Click), index < 2);
+            assert_eq!(node.is_disabled(), index >= 2);
+        }
+    }
+
+    #[test]
+    fn menu_trigger_preserves_an_existing_click_handler() {
+        let button = Button::new("menu-trigger").on_click(|_, _, _| {});
+        let handler = button.on_click.clone().unwrap();
+        let prepared = button.menu_trigger(false);
+        assert!(Rc::ptr_eq(&handler, prepared.on_click.as_ref().unwrap()));
+    }
+
+    #[gpui::test]
     fn disabled_legacy_button_keeps_existing_pointer_blocking(cx: &mut gpui::TestAppContext) {
         use std::{cell::Cell, rc::Rc};
 
@@ -1507,6 +1739,96 @@ mod tests {
 
         assert_eq!(clicks.get(), 3);
         assert_eq!(keyboard_clicks.get(), 2);
+    }
+
+    #[gpui::test]
+    fn supplied_focus_handle_preserves_keyboard_activation_and_disabled_behavior(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::{Context, KeyDownEvent, KeyUpEvent, Keystroke, Render, point};
+        use std::{cell::Cell, rc::Rc};
+
+        struct Harness {
+            focus: FocusHandle,
+            disabled: bool,
+            clicks: Rc<Cell<usize>>,
+        }
+        impl Render for Harness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let clicks = self.clicks.clone();
+                div()
+                    .tab_group()
+                    .child(
+                        Button::new("supplied-focus")
+                            .track_focus(&self.focus)
+                            .label("Supplied")
+                            .w(px(100.))
+                            .h(px(32.))
+                            .disabled(self.disabled)
+                            .on_click(move |_, _, _| clicks.set(clicks.get() + 1)),
+                    )
+                    .child(Button::new("default-focus").label("Default"))
+            }
+        }
+
+        fn activate(cx: &mut gpui::VisualTestContext) {
+            for key in ["enter", "space"] {
+                let keystroke = Keystroke::parse(key).unwrap();
+                cx.simulate_event(KeyDownEvent {
+                    keystroke: keystroke.clone(),
+                    is_held: false,
+                    prefer_character_input: false,
+                });
+                cx.simulate_event(KeyUpEvent { keystroke });
+            }
+        }
+
+        cx.update(crate::init);
+        let clicks = Rc::new(Cell::new(0));
+        let (view, cx) = cx.add_window_view(|_, cx| Harness {
+            focus: cx.focus_handle(),
+            disabled: false,
+            clicks: clicks.clone(),
+        });
+        let supplied = view.read_with(cx, |view, _| view.focus.clone());
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            window.focus_next(cx);
+            assert_eq!(window.focused(cx).as_ref(), Some(&supplied));
+        });
+        activate(cx);
+        assert_eq!(clicks.get(), 2);
+
+        view.update(cx, |view, cx| {
+            view.disabled = true;
+            cx.notify();
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        activate(cx);
+        cx.simulate_click(point(px(10.), px(10.)), Default::default());
+        assert_eq!(
+            clicks.get(),
+            2,
+            "a disabled supplied handle cannot activate"
+        );
+        let default_focus = cx.update(|window, cx| {
+            window.focus_next(cx);
+            let focused = window.focused(cx).expect("the default button is focusable");
+            assert_ne!(focused, supplied, "disabled buttons are not Tab stops");
+            focused
+        });
+        view.update(cx, |view, cx| {
+            view.disabled = false;
+            cx.notify();
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            assert_eq!(window.focused(cx).as_ref(), Some(&default_focus));
+            window.focus_next(cx);
+            assert_eq!(window.focused(cx).as_ref(), Some(&supplied));
+        });
+        activate(cx);
+        assert_eq!(clicks.get(), 4);
     }
 
     #[gpui::test]

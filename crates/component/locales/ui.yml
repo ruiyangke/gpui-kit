@@ -1,4 +1,7 @@
 _version: 2
+Notification:
+  Dismiss:
+    en: Dismiss notification
 Attachment:
   Remove:
     en: Remove
@@ -276,6 +279,26 @@ List:
     zh-TW: 搜尋...
     it: Ricerca...
 Input:
+  Find in text:
+    en: Find in text
+  Replace with:
+    en: Replace with
+  Match case:
+    en: Match case
+  Toggle replace:
+    en: Toggle replace
+  Previous match:
+    en: Previous match
+  Next match:
+    en: Next match
+  Close search:
+    en: Close search
+  Enter search text:
+    en: Enter search text
+  No matches:
+    en: No matches
+  Match count:
+    en: "Match %{current} of %{total}"
   Decrement:
     en: Decrement
     zh-CN: 减少

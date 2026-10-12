@@ -46,6 +46,15 @@ fn diagnostic_highlight_style(
     }
 }
 
+// Preserve fractional CSS-like line spacing. Layout, hit testing, scrolling and
+// paint must share this value rather than rounding every row to a logical pixel.
+pub(super) fn text_line_height(window: &Window) -> Pixels {
+    let style = window.text_style();
+    style
+        .line_height
+        .to_pixels(style.font_size, window.rem_size())
+}
+
 const BOTTOM_MARGIN_ROWS: usize = 3;
 pub(super) const RIGHT_MARGIN: Pixels = px(10.);
 pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(6.);
@@ -126,6 +135,7 @@ struct EditorScrollbarLayout {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct LongestLineKey {
     document_revision: u64,
+    tab_size: usize,
     row: usize,
     len: usize,
     font: gpui::Font,
@@ -2065,7 +2075,8 @@ impl<M: InputModeKind> TextElement<M> {
 
             debug_assert_eq!(line_item.len(), line_text.len());
 
-            let mut wrapped_lines: SmallVec<[ShapedLine; 1]> = SmallVec::with_capacity(1);
+            let mut wrapped_lines: SmallVec<[crate::input::display_map::InputLine; 1]> =
+                SmallVec::with_capacity(1);
             let mut line_has_background = false;
 
             for range in &line_item.wrapped_lines {
@@ -2088,7 +2099,10 @@ impl<M: InputModeKind> TextElement<M> {
                     .shape_line(sub_line, font_size, &line_runs, None);
 
                 line_has_background |= has_background(&line_runs);
-                wrapped_lines.push(shaped_line);
+                wrapped_lines.push(crate::input::display_map::InputLine::with_tabs(
+                    shaped_line,
+                    last_layout.space_width * state.mode.tab_size().tab_size.max(1) as f32,
+                ));
             }
 
             // Use the first visual line's indentation width for continuation lines.
@@ -2104,7 +2118,7 @@ impl<M: InputModeKind> TextElement<M> {
             };
 
             let line_layout = LineLayout::new()
-                .lines(wrapped_lines)
+                .inline_lines(wrapped_lines)
                 .wrap_indent(wrap_indent)
                 .with_background(line_has_background)
                 .with_whitespaces(whitespace_indicators.clone());
@@ -2487,7 +2501,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let state = self.state.read(cx);
-        let line_height = window.line_height();
+        let line_height = text_line_height(window);
 
         let mut style = Style::default();
         style.size.width = relative(1.).into();
@@ -2527,6 +2541,9 @@ impl<M: InputModeKind> Element for TextElement<M> {
 
         self.state.update(cx, |state, cx| {
             state.display_map.set_font(font, text_size, cx);
+            state
+                .display_map
+                .set_tab_size(state.mode.tab_size().tab_size, cx);
             state.display_map.ensure_text_prepared(&state.text, cx);
         });
 
@@ -2585,7 +2602,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             });
         }
 
-        let line_height = window.line_height();
+        let line_height = text_line_height(window);
         let token_elements = self.measure_tokens(
             (bounds.size.width - line_number_width - RIGHT_MARGIN).max(px(1.)),
             line_height,
@@ -2731,6 +2748,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             let longest_line = state.text.slice_line(longest_row);
             let key = LongestLineKey {
                 document_revision: state.document_revision,
+                tab_size: state.mode.tab_size().tab_size,
                 row: longest_row,
                 len: longest_line.len(),
                 font: style.font(),
@@ -2745,22 +2763,28 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 Some((_, width)) => width,
                 None => {
                     let longest_line: SharedString = longest_line.to_string().into();
-                    window
-                        .text_system()
-                        .shape_line(
-                            longest_line.clone(),
-                            text_size,
-                            &[TextRun {
-                                len: longest_line.len(),
-                                font: key.font.clone(),
-                                color: gpui::black(),
-                                background_color: None,
-                                underline: None,
-                                strikethrough: None,
-                            }],
-                            wrap_width,
+                    let shaped = window.text_system().shape_line(
+                        longest_line.clone(),
+                        text_size,
+                        &[TextRun {
+                            len: longest_line.len(),
+                            font: key.font.clone(),
+                            color: gpui::black(),
+                            background_color: None,
+                            underline: None,
+                            strikethrough: None,
+                        }],
+                        wrap_width,
+                    );
+                    if state.is_single_line() {
+                        shaped.width
+                    } else {
+                        crate::input::display_map::InputLine::with_tabs(
+                            shaped,
+                            space_width * key.tab_size.max(1) as f32,
                         )
                         .width
+                    }
                 }
             };
             state
@@ -2776,6 +2800,13 @@ impl<M: InputModeKind> Element for TextElement<M> {
                     .as_ref()
                     .map_or(px(0.), |cache| cache.unwrapped_width)
             };
+        }
+        // A tabbed row can be wider than the longest row by byte length.
+        // Always keep every rendered row reachable by horizontal scrolling.
+        if !state.soft_wrap {
+            longest_line_width = lines.iter().fold(longest_line_width, |width, line| {
+                width.max(line.longest_width)
+            });
         }
         last_layout.lines = Rc::new(lines);
 
@@ -3032,7 +3063,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
         );
 
         // Paint multi line text
-        let line_height = window.line_height();
+        let line_height = text_line_height(window);
         let origin = bounds.origin;
 
         let invisible_top_padding = prepaint.last_layout.visible_top;
@@ -3971,9 +4002,11 @@ mod tests {
                     corners.top_right.x,
                     first.wrap_indent + first.wrapped_lines[index + 1].width
                 );
-                assert_eq!(
-                    corners.bottom_left.y - corners.top_left.y,
-                    layout.line_height
+                // Fractional line heights lose a few ulps when subtracting
+                // absolute row positions; keep the geometry within 0.001 px.
+                assert!(
+                    ((corners.bottom_left.y - corners.top_left.y) - layout.line_height).abs()
+                        < px(0.001)
                 );
             }
             let blank_offset = text.find("\n\n").unwrap() + 1;

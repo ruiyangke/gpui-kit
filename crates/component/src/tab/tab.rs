@@ -63,6 +63,7 @@ pub enum TabVariant {
 impl TabVariant {
     fn height(&self, size: Size) -> Pixels {
         match size {
+            Size::Size(height) => height,
             Size::XSmall => match self {
                 TabVariant::Underline => px(26.),
                 _ => px(20.),
@@ -84,6 +85,13 @@ impl TabVariant {
 
     pub(super) fn inner_height(&self, size: Size) -> Pixels {
         match size {
+            Size::Size(height) => (height
+                - match self {
+                    TabVariant::Underline => px(6.),
+                    TabVariant::Segmented => px(8.),
+                    _ => px(2.),
+                })
+            .max(px(0.)),
             Size::XSmall => match self {
                 TabVariant::Tab | TabVariant::Outline | TabVariant::Pill => px(18.),
                 TabVariant::Segmented | TabVariant::Folder => px(16.),
@@ -131,6 +139,14 @@ impl TabVariant {
 
     fn inner_margins(&self, size: Size) -> Edges<Pixels> {
         match size {
+            Size::Size(_) => match self {
+                TabVariant::Underline => Edges {
+                    top: px(2.),
+                    bottom: px(3.),
+                    ..Default::default()
+                },
+                _ => Edges::all(px(0.)),
+            },
             Size::XSmall => match self {
                 TabVariant::Underline => Edges {
                     top: px(1.),
@@ -544,7 +560,10 @@ pub struct Tab {
     suffix: Option<AnyElement>,
     children: Vec<AnyElement>,
     variant: TabVariant,
+    pub(super) subtle: bool,
+    quiet: bool,
     size: Size,
+    pub(super) label_size: Option<Pixels>,
     pub(super) disabled: bool,
     pub(super) selected: bool,
     pub(super) indicator_active: bool,
@@ -612,7 +631,10 @@ impl Default for Tab {
             prefix: None,
             suffix: None,
             variant: TabVariant::default(),
+            subtle: false,
+            quiet: false,
             size: Size::default(),
+            label_size: None,
             max_width: None,
             on_click: None,
         }
@@ -623,6 +645,21 @@ impl Tab {
     /// Create a new tab with a label.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Compact, borderless native-style tab with a restrained selection tint.
+    /// This appearance overrides the visual variant without changing tab semantics.
+    pub fn subtle(mut self) -> Self {
+        self.subtle = true;
+        self
+    }
+
+    /// A restrained compact tab: muted inactive text and a soft selection tint.
+    /// Opt-in so existing subtle tab bars keep their established appearance.
+    pub fn quiet(mut self) -> Self {
+        self.subtle = true;
+        self.quiet = true;
+        self
     }
 
     /// Set label for the tab.
@@ -774,8 +811,43 @@ impl RenderOnce for Tab {
         let mut selected_style = self.variant.selected(cx);
         let mut disabled_style = self.variant.disabled(self.selected, cx);
         let mut hover_style = self.variant.hovered(self.selected, cx);
+        if self.subtle {
+            let plain = |fg, bg: Hsla| TabStyle {
+                fg,
+                bg: bg.into(),
+                ..Default::default()
+            };
+            normal_style = plain(cx.theme().foreground, cx.theme().transparent);
+            selected_style = plain(cx.theme().foreground, cx.theme().foreground.opacity(0.08));
+            hover_style = plain(cx.theme().foreground, cx.theme().foreground.opacity(0.06));
+            disabled_style = plain(
+                cx.theme().muted_foreground,
+                if self.selected {
+                    cx.theme().foreground.opacity(0.04)
+                } else {
+                    cx.theme().transparent
+                },
+            );
+        }
+        if self.quiet {
+            normal_style.fg = cx.theme().muted_foreground;
+            selected_style.bg = cx
+                .theme()
+                .foreground
+                .opacity(if cx.theme().is_dark() { 0.08 } else { 0.045 })
+                .into();
+            hover_style.bg = cx.theme().foreground.opacity(0.035).into();
+        }
         if self.disabled {
-            hover_style = self.variant.disabled(self.selected, cx);
+            hover_style = if self.subtle {
+                TabStyle {
+                    fg: disabled_style.fg,
+                    bg: disabled_style.bg,
+                    ..Default::default()
+                }
+            } else {
+                self.variant.disabled(self.selected, cx)
+            };
         }
         let tab_bar_prefix = self.tab_bar_prefix.unwrap_or_default();
         if !tab_bar_prefix {
@@ -793,19 +865,49 @@ impl RenderOnce for Tab {
         } else {
             &normal_style
         };
-        let radius = self.variant.radius(self.size, cx);
-        let inner_radius = self.variant.inner_radius(self.size, cx);
-        let inner_paddings = self.variant.inner_paddings(self.size);
-        let inner_margins = self.variant.inner_margins(self.size);
-        let inner_height = self.variant.inner_height(self.size);
-        let height = self.variant.height(self.size);
+        let radius = if self.quiet {
+            px(4.)
+        } else if self.subtle {
+            px(5.)
+        } else {
+            self.variant.radius(self.size, cx)
+        };
+        let inner_radius = if self.subtle {
+            px(0.)
+        } else {
+            self.variant.inner_radius(self.size, cx)
+        };
+        let inner_paddings = if self.subtle {
+            Edges {
+                left: px(8.),
+                right: px(8.),
+                ..Default::default()
+            }
+        } else {
+            self.variant.inner_paddings(self.size)
+        };
+        let inner_margins = if self.subtle {
+            Edges::all(px(0.))
+        } else {
+            self.variant.inner_margins(self.size)
+        };
+        let inner_height = if self.subtle {
+            px(26.)
+        } else {
+            self.variant.inner_height(self.size)
+        };
+        let height = if self.subtle {
+            px(26.)
+        } else {
+            self.variant.height(self.size)
+        };
         let aria_label = self.a11y_label();
         let folder = self.variant == TabVariant::Folder;
         let metrics = FolderTabMetrics::new(self.size, cx);
         let has_prefix = self.prefix.is_some();
 
         let segmented_indicator_active =
-            self.variant == TabVariant::Segmented && self.indicator_active;
+            !self.subtle && self.variant == TabVariant::Segmented && self.indicator_active;
         let has_inline_inner_bg =
             self.selected && segmented_indicator_active && !self.indicator_ready;
         let inline_inner_bg = tab_style.inner_bg;
@@ -824,8 +926,11 @@ impl RenderOnce for Tab {
         // does this for its `inner_bg` above). Skip disabled tabs so a
         // disabled-selected tab keeps its dimmed styling instead of the
         // full-strength indicator color.
-        let suppress_active_visual =
-            self.selected && !self.disabled && self.indicator_active && self.indicator_ready;
+        let suppress_active_visual = !self.subtle
+            && self.selected
+            && !self.disabled
+            && self.indicator_active
+            && self.indicator_ready;
         // Pill paints its active state via the outer `bg`.
         let selected_outer_bg = if suppress_active_visual && self.variant == TabVariant::Pill {
             cx.theme().transparent.into()
@@ -845,7 +950,8 @@ impl RenderOnce for Tab {
         // sliding into place. Fade it from the normal color in sync with the
         // indicator slide (keyed on the indicator epoch so it restarts on each
         // switch). `epoch == 0` is the initial layout (no slide), so we skip it.
-        let animate_fg = self.selected
+        let animate_fg = !self.subtle
+            && self.selected
             && !self.disabled
             && self.variant == TabVariant::Pill
             && self.indicator_active
@@ -963,6 +1069,12 @@ impl RenderOnce for Tab {
                 Size::Large => this.text_base(),
                 _ => this.text_sm(),
             })
+            .when(self.subtle, |this| this.text_size(px(12.)))
+            .when(self.quiet, |this| {
+                // Selection uses color and tint without changing label metrics.
+                this.font_weight(gpui::FontWeight::NORMAL)
+            })
+            .when_some(self.label_size, |this, size| this.text_size(size))
             .rounded(radius)
             .when(folder, |this| {
                 this.px(metrics.padding_x).pb(metrics.top_padding)

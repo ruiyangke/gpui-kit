@@ -8,7 +8,7 @@ use crate::{StyleSized as _, StyledExt as _, ThemeStyled as _};
 use gpui::{
     AnyElement, App, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement,
     RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
-    prelude::FluentBuilder as _, px, relative, rems, svg,
+    prelude::FluentBuilder as _, px, relative, svg,
 };
 use gpui_base::{CheckboxIndicator, spring};
 
@@ -212,7 +212,7 @@ pub(crate) fn checkbox_check_icon(
             Size::Small => this.size_2p5(),
             Size::Medium => this.size_3(),
             Size::Large => this.size_3p5(),
-            _ => this.size_3(),
+            Size::Size(size) => this.size((size - px(4.)).max(px(0.))),
         })
         .text_color(color)
         .when(opacity > 0., |this| {
@@ -224,12 +224,18 @@ impl RenderOnce for Checkbox {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let checked = self.checked;
         let has_content = self.label.is_some() || !self.children.is_empty();
-        let indicator_size = rems(match self.size {
-            Size::XSmall => 0.75,
-            Size::Small => 0.875,
-            Size::Large => 1.125,
-            _ => 1.,
-        });
+        let indicator_size = match self.size {
+            Size::Size(size) => size,
+            size => {
+                window.rem_size()
+                    * match size {
+                        Size::XSmall => 0.75,
+                        Size::Small => 0.875,
+                        Size::Large => 1.125,
+                        _ => 1.,
+                    }
+            }
+        };
 
         let base = self.base;
         let children = self.children;
@@ -296,7 +302,9 @@ impl RenderOnce for Checkbox {
                     .relative()
                     .size(indicator_size)
                     // Center on the first 1.25em line, including when the label wraps.
-                    .when(has_content, |this| this.mt(indicator_size * 0.125))
+                    .when(has_content && !matches!(self.size, Size::Size(_)), |this| {
+                        this.mt(indicator_size * 0.125)
+                    })
                     .flex_shrink_0()
                     .border_1()
                     .rounded(radius)

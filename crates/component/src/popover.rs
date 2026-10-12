@@ -197,6 +197,17 @@ impl Popover {
         self
     }
 
+    /// Build a composite trigger with its actual expanded state before erasing
+    /// its type, so menu adapters can amend the existing control's semantics.
+    #[doc(hidden)]
+    pub(crate) fn trigger_with(
+        mut self,
+        trigger: impl FnOnce(bool, &Window, &App) -> AnyElement + 'static,
+    ) -> Self {
+        self.trigger = Some(Box::new(trigger));
+        self
+    }
+
     /// Set the default open state of the popover, default is `false`.
     ///
     /// This is only used to initialize the open state of the popover.

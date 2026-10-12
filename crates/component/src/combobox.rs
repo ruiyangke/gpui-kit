@@ -23,7 +23,10 @@ use crate::{
     sizing::DROPDOWN_LIST_PADDING,
     v_flex,
 };
-use gpui_base::{Combobox as BaseCombobox, GlobalState};
+use gpui_base::{GlobalState, Select as BaseSelect};
+
+#[path = "combobox_semantics.rs"]
+mod semantics;
 
 // MARK: ComboboxTriggerContext
 
@@ -71,6 +74,7 @@ pub type ComboboxChange = SearchableListChange;
 // MARK: ComboboxOptions
 
 struct ComboboxOptions {
+    accessibility_label: Option<SharedString>,
     style: StyleRefinement,
     size: Size,
     cleanable: bool,
@@ -88,6 +92,7 @@ struct ComboboxOptions {
 impl Default for ComboboxOptions {
     fn default() -> Self {
         Self {
+            accessibility_label: None,
             style: StyleRefinement::default(),
             size: Size::default(),
             cleanable: false,
@@ -132,6 +137,9 @@ where
 {
     /// Emitted on every toggle (item added or removed).
     Change(Vec<<D::Item as SearchableListItem>::Value>),
+    /// Accepted single-select item activation, including the current item.
+    /// Unlike Confirm, this is never emitted for Escape or outside dismissal.
+    Activate(Vec<<D::Item as SearchableListItem>::Value>),
     /// Emitted when the popover closes.
     Confirm(Vec<<D::Item as SearchableListItem>::Value>),
 }
@@ -156,17 +164,31 @@ where
         let state = SearchableListState::new(
             delegate,
             selected_indices,
-            move |selected_index, _secondary, window, cx| {
+            move |selected_item, _secondary, window, cx| {
                 cx.defer_in(window, {
                     let weak_confirm = weak_confirm.clone();
                     move |list_state, window, cx| {
-                        let Some(index) = selected_index else {
+                        let Some(selected_item) = selected_item else {
+                            return;
+                        };
+                        let Some(index) = list_state
+                            .delegate()
+                            .delegate
+                            .position(selected_item.value())
+                        else {
                             return;
                         };
 
                         let Some(item) = list_state.delegate().delegate.item(index).cloned() else {
                             return;
                         };
+                        if !list_state
+                            .delegate()
+                            .delegate
+                            .is_item_enabled(index, &item, cx)
+                        {
+                            return;
+                        }
 
                         let ix = index;
 
@@ -181,8 +203,11 @@ where
 
                         let changes = Self::selection_changes(multiple, &selection, ix, &item);
 
-                        let before_indices: Vec<IndexPath> =
-                            selection.iter().map(|(ix, _)| *ix).collect();
+                        // Filtering can replace an item without changing its row index.
+                        let before_values: Vec<_> = selection
+                            .iter()
+                            .map(|(_, item)| item.value().clone())
+                            .collect();
 
                         // on_will_change is called directly — entity-handle access would
                         // re-enter the ListState lock that defer_in holds for this callback.
@@ -191,10 +216,13 @@ where
                             .delegate
                             .on_will_change(&mut selection, &changes);
 
-                        let after_indices: Vec<IndexPath> =
-                            selection.iter().map(|(ix, _)| *ix).collect();
-                        let changed = before_indices != after_indices;
-                        let should_close = changed && !multiple;
+                        let after_values: Vec<_> = selection
+                            .iter()
+                            .map(|(_, item)| item.value().clone())
+                            .collect();
+                        let changed = before_values != after_values;
+                        let should_close =
+                            !multiple && after_values.iter().any(|value| value == item.value());
 
                         let new_selection = weak_confirm.update(cx, |this, cx| {
                             this.state.selection = selection;
@@ -205,6 +233,7 @@ where
                             }
 
                             if should_close {
+                                cx.emit(ComboboxEvent::Activate(this.selected_values()));
                                 cx.emit(ComboboxEvent::Confirm(this.selected_values()));
                                 this.set_open(false, cx);
                                 this.focus(window, cx);
@@ -398,6 +427,24 @@ where
         self.state.list.read(cx).query_input.read(cx).value()
     }
 
+    fn accessibility_value(&self) -> SharedString {
+        self.state
+            .selection
+            .iter()
+            .map(|(_, item)| item.title().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+            .into()
+    }
+
+    /// Dismiss for an application-owned transition without moving focus or
+    /// committing a selection. The caller can focus its destination afterward.
+    pub fn close(&mut self, cx: &mut Context<Self>) {
+        if self.state.open {
+            self.set_open(false, cx);
+        }
+    }
+
     /// Sets the search query and updates the filtered items.
     pub fn set_query(&self, query: impl Into<SharedString>, window: &mut Window, cx: &mut App) {
         let query = query.into();
@@ -457,7 +504,10 @@ where
         let changes = Self::selection_changes(self.multiple, &self.state.selection, ix, &item);
 
         let mut selection = self.state.selection.clone();
-        let before_indices: Vec<IndexPath> = selection.iter().map(|(ix, _)| *ix).collect();
+        let before_values: Vec<_> = selection
+            .iter()
+            .map(|(_, item)| item.value().clone())
+            .collect();
 
         self.state.list.update(cx, |list, _cx| {
             list.delegate_mut()
@@ -465,9 +515,12 @@ where
                 .on_will_change(&mut selection, &changes);
         });
 
-        let after_indices: Vec<IndexPath> = selection.iter().map(|(ix, _)| *ix).collect();
-        let changed = before_indices != after_indices;
-        let should_close = changed && !self.multiple;
+        let after_values: Vec<_> = selection
+            .iter()
+            .map(|(_, item)| item.value().clone())
+            .collect();
+        let changed = before_values != after_values;
+        let should_close = !self.multiple && after_values.iter().any(|value| value == item.value());
 
         self.state.selection = selection;
         self.state.sync_snapshot(cx);
@@ -483,6 +536,7 @@ where
                 list.delegate_mut().delegate.on_confirm(&final_selection);
             });
 
+            cx.emit(ComboboxEvent::Activate(self.selected_values()));
             cx.emit(ComboboxEvent::Confirm(self.selected_values()));
             self.set_open(false, cx);
             self.focus(window, cx);
@@ -777,6 +831,12 @@ where
         }
     }
 
+    /// Set the accessible name independently of the visible placeholder.
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.options.accessibility_label = Some(label.into());
+        self
+    }
+
     /// Set the width of the dropdown menu.
     pub fn menu_width(mut self, width: impl Into<Length>) -> Self {
         self.options.menu_width = width.into();
@@ -904,8 +964,10 @@ where
     D: SearchableListDelegate + 'static,
     <D::Item as SearchableListItem>::Value: PartialEq + Clone,
 {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let disabled = self.options.disabled;
+        let accessibility_label = self.options.accessibility_label.clone();
+        let accessibility_value = self.state.read(cx).accessibility_value();
         let focus_handle = self.state.read(cx).state.focus_handle.clone();
         let render_trigger = self.render_trigger;
         let footer = self.footer;
@@ -938,7 +1000,14 @@ where
         let open_state = self.state.clone();
         let confirm_state = self.state.clone();
 
-        BaseCombobox::new(self.id)
+        // BaseCombobox delegates to Select with this key context, but 0.7.1
+        // does not forward accessible label/value. Use the same Kit root directly.
+        let select = BaseSelect::new(self.id)
+            .key_context("Combobox")
+            .when_some(accessibility_label, |this, label| {
+                this.accessibility_label(label)
+            })
+            .accessibility_value(accessibility_value)
             .open(is_open)
             .disabled(disabled)
             .focus_handle(&focus_handle)
@@ -954,7 +1023,11 @@ where
                 });
             })
             .size_full()
-            .child(self.state)
+            .child(self.state);
+        semantics::DisabledSelect {
+            inner: select.render(window, cx).into_element(),
+            disabled,
+        }
     }
 }
 
@@ -1082,7 +1155,10 @@ fn render_popup_shell<D: SearchableListDelegate + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, rc::Rc};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
 
     use gpui::{
         AppContext as _, Bounds, Context, Entity, Modifiers, MouseButton, MouseDownEvent, Pixels,
@@ -1100,6 +1176,8 @@ mod tests {
 
     struct TestComboboxEventCollector {
         event_count: Rc<Cell<usize>>,
+        events: Rc<RefCell<Vec<(bool, Vec<&'static str>)>>>,
+        activations: Vec<Vec<&'static str>>,
         _subscription: Subscription,
     }
 
@@ -1110,18 +1188,259 @@ mod tests {
         ) -> Self {
             let event_count = Rc::new(Cell::new(0));
             let event_count_for_subscription = event_count.clone();
+            let events = Rc::new(RefCell::new(Vec::new()));
+            let events_for_subscription = events.clone();
             let _subscription = cx.subscribe(
                 state,
-                move |_, _, _: &ComboboxEvent<SearchableVec<&'static str>>, _| {
+                move |this, _, event: &ComboboxEvent<SearchableVec<&'static str>>, _| {
+                    if let ComboboxEvent::Activate(values) = event {
+                        this.activations.push(values.clone());
+                        return;
+                    }
                     event_count_for_subscription.set(event_count_for_subscription.get() + 1);
+                    events_for_subscription.borrow_mut().push(match event {
+                        ComboboxEvent::Change(values) => (false, values.clone()),
+                        ComboboxEvent::Confirm(values) => (true, values.clone()),
+                        ComboboxEvent::Activate(_) => unreachable!(),
+                    });
                 },
             );
 
             Self {
                 event_count,
+                events,
+                activations: Vec::new(),
                 _subscription,
             }
         }
+    }
+
+    // Filtering gives a different value the same row index as the old selection.
+    fn assert_current_item_activation(cx: &mut TestAppContext, through_list: bool) {
+        use crate::list::ListDelegate as _;
+        cx.update(crate::init);
+        let cx = cx.add_empty_window();
+        let state = cx.update(|window, cx| {
+            cx.new(|cx| {
+                ComboboxState::new(
+                    SearchableVec::new(vec!["React", "Vue"]),
+                    vec![IndexPath::new(0)],
+                    window,
+                    cx,
+                )
+            })
+        });
+        let collector = cx.update(|_, cx| cx.new(|cx| TestComboboxEventCollector::new(&state, cx)));
+        cx.update(|window, cx| {
+            state.update(cx, |state, cx| {
+                state.set_open(true, cx);
+                if through_list {
+                    state.state.list.update(cx, |list, cx| {
+                        list.delegate_mut().confirm(false, window, cx)
+                    });
+                } else {
+                    state.handle_item_select(IndexPath::new(0), window, cx);
+                }
+            })
+        });
+        cx.update(|window, cx| {
+            assert!(!state.read(cx).state.open);
+            assert_eq!(collector.read(cx).activations, vec![vec!["React"]]);
+            assert_eq!(
+                *collector.read(cx).events.borrow(),
+                vec![(true, vec!["React"])]
+            );
+            state.update(cx, |state, cx| {
+                state.set_open(true, cx);
+                state.dismiss(&left_press(point(px(200.), px(200.))), window, cx);
+            });
+        });
+        cx.update(|_, cx| {
+            assert_eq!(
+                collector.read(cx).activations,
+                vec![vec!["React"]],
+                "dismissal must not activate the current server"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn current_item_direct_activation_closes_without_change(cx: &mut TestAppContext) {
+        assert_current_item_activation(cx, false);
+    }
+    #[gpui::test]
+    fn current_item_list_activation_closes_without_change(cx: &mut TestAppContext) {
+        assert_current_item_activation(cx, true);
+    }
+
+    // Exercise both the direct handler and the deferred ListDelegate confirmation.
+    fn assert_filtered_row_replacement(cx: &mut TestAppContext, through_list: bool) {
+        use crate::list::ListDelegate as _;
+
+        cx.update(crate::init);
+        let cx = cx.add_empty_window();
+        let state = cx.update(|window, cx| {
+            cx.new(|cx| {
+                ComboboxState::new(
+                    SearchableVec::new(vec!["React", "Vue"]),
+                    vec![IndexPath::new(0)],
+                    window,
+                    cx,
+                )
+                .searchable(true)
+            })
+        });
+        let collector = cx.update(|_, cx| cx.new(|cx| TestComboboxEventCollector::new(&state, cx)));
+
+        cx.update(|window, cx| {
+            state.update(cx, |state, cx| {
+                state.set_open(true, cx);
+                state.state.list.update(cx, |list, cx| {
+                    let _ = list
+                        .delegate_mut()
+                        .delegate
+                        .perform_search("Vue", window, cx);
+                    list.set_selected_index(Some(IndexPath::new(0)), window, cx);
+                });
+                assert_eq!(state.selected_values(), vec!["React"]);
+                assert_eq!(
+                    state
+                        .state
+                        .list
+                        .read(cx)
+                        .delegate()
+                        .delegate
+                        .item(IndexPath::new(0)),
+                    Some(&"Vue"),
+                );
+                if through_list {
+                    state.state.list.update(cx, |list, cx| {
+                        list.delegate_mut().confirm(false, window, cx);
+                    });
+                } else {
+                    state.handle_item_select(IndexPath::new(0), window, cx);
+                }
+            });
+        });
+
+        cx.update(|_, cx| {
+            assert_eq!(state.read(cx).selected_values(), vec!["Vue"]);
+            assert!(
+                !state.read(cx).state.open,
+                "single selection must close the popover"
+            );
+            assert_eq!(
+                *collector.read(cx).events.borrow(),
+                vec![(false, vec!["Vue"]), (true, vec!["Vue"])],
+                "emit Change then Confirm with the new value exactly once",
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn test_filtered_row_replacement_direct(cx: &mut TestAppContext) {
+        assert_filtered_row_replacement(cx, false);
+    }
+
+    #[gpui::test]
+    fn test_filtered_row_replacement_list_confirm(cx: &mut TestAppContext) {
+        assert_filtered_row_replacement(cx, true);
+    }
+
+    #[gpui::test]
+    fn accessible_value_tracks_selection_not_filtered_row(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let cx = cx.add_empty_window();
+        cx.update(|window, cx| {
+            let state = cx.new(|cx| {
+                ComboboxState::new(
+                    SearchableVec::new(vec!["Rust", "Go"]),
+                    vec![IndexPath::new(0)],
+                    window,
+                    cx,
+                )
+                .searchable(true)
+            });
+            let control = Combobox::new(&state)
+                .placeholder("Pick language")
+                .accessibility_label("Language");
+            assert_eq!(
+                control.options.accessibility_label.as_deref(),
+                Some("Language")
+            );
+            assert_eq!(
+                control.options.placeholder.as_deref(),
+                Some("Pick language")
+            );
+            state.update(cx, |state, cx| {
+                assert_eq!(state.accessibility_value().as_ref(), "Rust");
+                state.set_query("Go", window, cx);
+                assert_eq!(state.accessibility_value().as_ref(), "Rust");
+                state.handle_item_select(IndexPath::new(0), window, cx);
+                assert_eq!(state.accessibility_value().as_ref(), "Go");
+                state.clear_selection(cx);
+                assert_eq!(state.accessibility_value().as_ref(), "");
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn disabled_root_preserves_accessibility_identity_and_value(cx: &mut TestAppContext) {
+        use gpui::{Element, IntoElement, RenderOnce};
+        cx.update(crate::init);
+        let cx = cx.add_empty_window();
+        cx.update(|window, cx| {
+            let state = cx.new(|cx| {
+                ComboboxState::new(
+                    SearchableVec::new(vec!["Rust", "Go"]),
+                    vec![IndexPath::new(0)],
+                    window,
+                    cx,
+                )
+            });
+            for disabled in [true, false] {
+                let element = Combobox::new(&state)
+                    .accessibility_label("Language")
+                    .disabled(disabled)
+                    .render(window, cx)
+                    .into_element();
+                assert!(element.id().is_some());
+                assert_eq!(element.a11y_role(), Some(gpui::accesskit::Role::ComboBox));
+                let mut node = gpui::accesskit::Node::new(gpui::accesskit::Role::ComboBox);
+                element.write_a11y_info(&mut node);
+                assert_eq!(node.is_disabled(), disabled);
+                assert_eq!(node.label(), Some("Language"));
+                assert_eq!(node.value(), Some("Rust"));
+                assert_eq!(node.is_expanded(), Some(false));
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn close_preserves_selection_and_releases_popup_context(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let cx = cx.add_empty_window();
+        cx.update(|window, cx| {
+            let state = cx.new(|cx| {
+                ComboboxState::new(
+                    SearchableVec::new(vec!["Rust", "Go"]),
+                    vec![IndexPath::new(0)],
+                    window,
+                    cx,
+                )
+            });
+            let collector = cx.new(|cx| TestComboboxEventCollector::new(&state, cx));
+            state.update(cx, |state, cx| {
+                state.set_open(true, cx);
+                assert!(state.state.deferred_context.is_some());
+                state.close(cx);
+                state.close(cx);
+                assert!(!state.state.open);
+                assert!(state.state.deferred_context.is_none());
+                assert_eq!(state.selected_values(), vec!["Rust"]);
+            });
+            assert_eq!(collector.read(cx).event_count.get(), 0);
+        });
     }
 
     #[gpui::test]
@@ -1576,11 +1895,16 @@ mod tests {
 
             // Simulate a click on index 1 via handle_item_select; on_will_change vetoes it.
             state.update(cx, |s, cx| {
+                s.set_open(true, cx);
                 s.handle_item_select(IndexPath::new(1), window, cx);
             });
 
             // Selection must remain unchanged because on_will_change left it unmodified.
             assert_eq!(state.read(cx).selected_values(), &["Rust"]);
+            assert!(
+                state.read(cx).state.open,
+                "a vetoed selection must leave the menu open"
+            );
         });
     }
 
