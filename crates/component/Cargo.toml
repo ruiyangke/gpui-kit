@@ -19,6 +19,7 @@ gpui-fast = ["dep:gpui-fast", "gpui-base/gpui-fast", "gpui-kit-assets/gpui-fast"
 test-support = ["gpui/test-support", "gpui-base/test-support", "gpui-fast?/test-support"]
 decimal = ["gpui-base/decimal"]
 inspector = ["gpui_macros/inspector", "gpui/inspector", "gpui-base/inspector", "gpui-fast?/inspector"]
+external-grammars = ["tree-sitter"]
 tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-json"]
 # Speech input: microphone capture and the system speech recognizer.
 speech = [

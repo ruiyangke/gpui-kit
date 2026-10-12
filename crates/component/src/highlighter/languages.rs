@@ -371,6 +371,9 @@ impl Language {
     pub(super) fn config(&self) -> GrammarConfig {
         let (language, query, injection, locals) = match self {
             Self::Plain => return GrammarConfig::plain(self.name()),
+            #[cfg(feature = "external-grammars")]
+            Self::Json => return GrammarConfig::plain(self.name()),
+            #[cfg(not(feature = "external-grammars"))]
             Self::Json => (
                 tree_sitter_json::LANGUAGE,
                 include_str!("languages/json/highlights.scm"),
