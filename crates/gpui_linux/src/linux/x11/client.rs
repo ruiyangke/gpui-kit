@@ -1201,6 +1201,8 @@ impl X11Client {
                 };
                 drop(state);
                 window.handle_input(PlatformInput::KeyDown(gpui::KeyDownEvent {
+                    physical_key: Some(gpui::PhysicalKey::Native(u32::from(event.detail))),
+                    key_metadata: None,
                     keystroke,
                     is_held: false,
                     prefer_character_input: false,
@@ -1226,7 +1228,11 @@ impl X11Client {
                     keystroke
                 };
                 drop(state);
-                window.handle_input(PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }));
+                window.handle_input(PlatformInput::KeyUp(gpui::KeyUpEvent {
+                    physical_key: Some(gpui::PhysicalKey::Native(u32::from(event.detail))),
+                    key_metadata: None,
+                    keystroke,
+                }));
             }
             Event::XinputButtonPress(event) => {
                 let window = self.get_window(event.event)?;

@@ -2207,6 +2207,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                             state.compose_state = Some(compose);
                         }
                         let input = PlatformInput::KeyDown(KeyDownEvent {
+                            physical_key: Some(gpui::PhysicalKey::Native(keycode.raw())),
+                            key_metadata: None,
                             keystroke: keystroke.clone(),
                             is_held: false,
                             prefer_character_input: false,
@@ -2222,6 +2224,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                             .loop_handle
                             .insert_source(Timer::from_duration(state.repeat.delay), {
                                 let input = PlatformInput::KeyDown(KeyDownEvent {
+                                    physical_key: Some(gpui::PhysicalKey::Native(keycode.raw())),
+                                    key_metadata: None,
                                     keystroke,
                                     is_held: true,
                                     prefer_character_input: false,
@@ -2257,6 +2261,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                     }
                     wl_keyboard::KeyState::Released if !keysym.is_modifier_key() => {
                         let input = PlatformInput::KeyUp(KeyUpEvent {
+                            physical_key: Some(gpui::PhysicalKey::Native(keycode.raw())),
+                            key_metadata: None,
                             keystroke: keystroke_from_xkb(keymap_state, state.modifiers, keycode),
                         });
 
@@ -2307,6 +2313,8 @@ impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for WaylandClientStatePtr {
                     // We should only send ASCII characters to Zed, otherwise a user could remap a letter like `か` or `相`.
                     if commit_text.len() == 1 {
                         window.handle_input(PlatformInput::KeyDown(KeyDownEvent {
+                            physical_key: None,
+                            key_metadata: None,
                             keystroke: Keystroke {
                                 modifiers: Modifiers::default(),
                                 key: commit_text.clone(),

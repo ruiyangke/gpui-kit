@@ -398,8 +398,12 @@ impl WindowsWindowInner {
     }
 
     fn handle_syskeyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
-        let input = handle_key_event(wparam, lparam, &self.state, |keystroke, _| {
-            PlatformInput::KeyUp(KeyUpEvent { keystroke })
+        let input = handle_key_event(wparam, lparam, &self.state, |keystroke, _, metadata| {
+            PlatformInput::KeyUp(KeyUpEvent {
+                physical_key: physical_key_from_lparam(lparam),
+                key_metadata: Some(metadata),
+                keystroke,
+            })
         })?;
         let mut func = self.state.callbacks.input.take()?;
 
@@ -417,8 +421,10 @@ impl WindowsWindowInner {
             wparam,
             lparam,
             &self.state,
-            |keystroke, prefer_character_input| {
+            |keystroke, prefer_character_input, metadata| {
                 PlatformInput::KeyDown(KeyDownEvent {
+                    physical_key: physical_key_from_lparam(lparam),
+                    key_metadata: Some(metadata),
                     keystroke,
                     is_held: lparam.0 & (0x1 << 30) > 0,
                     prefer_character_input,
@@ -440,9 +446,15 @@ impl WindowsWindowInner {
     }
 
     fn handle_keyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
-        let Some(input) = handle_key_event(wparam, lparam, &self.state, |keystroke, _| {
-            PlatformInput::KeyUp(KeyUpEvent { keystroke })
-        }) else {
+        let Some(input) =
+            handle_key_event(wparam, lparam, &self.state, |keystroke, _, metadata| {
+                PlatformInput::KeyUp(KeyUpEvent {
+                    physical_key: physical_key_from_lparam(lparam),
+                    key_metadata: Some(metadata),
+                    keystroke,
+                })
+            })
+        else {
             return Some(1);
         };
 
@@ -1515,7 +1527,7 @@ fn handle_key_event<F>(
     f: F,
 ) -> Option<PlatformInput>
 where
-    F: FnOnce(Keystroke, bool) -> PlatformInput,
+    F: FnOnce(Keystroke, bool, KeyEventMetadata) -> PlatformInput,
 {
     let virtual_key = VIRTUAL_KEY(wparam.loword());
     let modifiers = current_modifiers();
@@ -1552,8 +1564,24 @@ where
             }))
         }
         vkey => {
+            // Keep native layout facts separate from shortcut normalization.
+            // ToUnicode's no-state-change flag in generate_key_char preserves
+            // the dead-key state that Windows uses for subsequent WM_CHAR/IME.
+            let metadata = KeyEventMetadata {
+                unmodified_text: generate_key_char(
+                    vkey,
+                    u32::from(lparam.hiword() & 0xFF),
+                    false,
+                    false,
+                    false,
+                )
+                .map(Into::into),
+                modifiers,
+                caps_lock: current_capslock().on,
+                num_lock: unsafe { GetKeyState(VK_NUMLOCK.0 as i32) & 1 } != 0,
+            };
             let keystroke = parse_normal_key(vkey, lparam, modifiers)?;
-            Some(f(keystroke.0, keystroke.1))
+            Some(f(keystroke.0, keystroke.1, metadata))
         }
     }
 }
@@ -1821,5 +1849,29 @@ fn notify_frame_changed(handle: HWND) {
                 | SWP_NOZORDER,
         )
         .log_err();
+    }
+}
+
+// Key-up and repeat flags occupy higher bits and must not affect identity.
+fn physical_key_from_lparam(lparam: LPARAM) -> Option<gpui::PhysicalKey> {
+    let code = ((lparam.0 as usize >> 16) & 0x1ff) as u32;
+    (code & 0xff != 0).then_some(gpui::PhysicalKey::Native(code))
+}
+
+#[cfg(test)]
+mod physical_key_tests {
+    use super::physical_key_from_lparam;
+    use windows::Win32::Foundation::LPARAM;
+    #[test]
+    fn physical_key_keeps_extended_bit_but_ignores_press_repeat_release_flags() {
+        let normal = physical_key_from_lparam(LPARAM(0x001c0001));
+        assert_eq!(normal, Some(gpui::PhysicalKey::Native(0x1c)));
+        assert_eq!(
+            normal,
+            physical_key_from_lparam(LPARAM(0xc01c0001u32 as isize))
+        );
+        assert_eq!(normal, physical_key_from_lparam(LPARAM(0x401c0001)));
+        assert_ne!(normal, physical_key_from_lparam(LPARAM(0x011c0001)));
+        assert_eq!(physical_key_from_lparam(LPARAM(0)), None);
     }
 }

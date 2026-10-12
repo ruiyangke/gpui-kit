@@ -947,6 +947,8 @@ mod tests {
         cx.update(|window, cx| {
             window.dispatch_event(
                 PlatformInput::KeyDown(KeyDownEvent {
+                    physical_key: None,
+                    key_metadata: None,
                     keystroke: Keystroke {
                         key_char: Some("ą".into()),
                         ..Keystroke::parse("ctrl-alt-a").expect("valid keystroke")

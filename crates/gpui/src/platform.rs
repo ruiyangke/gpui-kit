@@ -1253,6 +1253,10 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn mouse_position(&self) -> Point<Pixels>;
     fn modifiers(&self) -> Modifiers;
     fn capslock(&self) -> Capslock;
+    /// Current Num Lock state, or None when this backend cannot report it.
+    fn numlock(&self) -> Option<bool> {
+        None
+    }
     fn set_input_handler(&mut self, input_handler: PlatformInputHandler);
     fn take_input_handler(&mut self) -> Option<PlatformInputHandler>;
     /// Apply the focused text region's [`TextInputConfiguration`] to the

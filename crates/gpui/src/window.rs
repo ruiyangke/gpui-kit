@@ -3435,6 +3435,12 @@ impl Window {
         self.capslock
     }
 
+    /// Current Num Lock state, or None when the platform cannot report it.
+    /// Query the backend so focus-loss releases do not reuse a previous key event.
+    pub fn numlock(&self) -> Option<bool> {
+        self.platform_window.numlock()
+    }
+
     /// Produces a new frame and assigns it to `rendered_frame`. To actually show
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
@@ -5592,6 +5598,8 @@ impl Window {
         let keystroke = keystroke.with_simulated_ime();
         let result = self.dispatch_event(
             PlatformInput::KeyDown(KeyDownEvent {
+                physical_key: None,
+                key_metadata: None,
                 keystroke: keystroke.clone(),
                 is_held: false,
                 prefer_character_input: false,
@@ -6471,6 +6479,8 @@ impl Window {
 
         'replay: for replay in replays {
             let event = KeyDownEvent {
+                physical_key: None,
+                key_metadata: None,
                 keystroke: replay.keystroke.clone(),
                 is_held: false,
                 prefer_character_input: true,
@@ -8978,6 +8988,8 @@ mod tests {
             window.draw(cx).clear(cx);
             window.dispatch_event(
                 PlatformInput::KeyDown(KeyDownEvent {
+                    physical_key: None,
+                    key_metadata: None,
                     keystroke: Keystroke::parse("down").expect("valid keystroke"),
                     is_held: false,
                     prefer_character_input: false,

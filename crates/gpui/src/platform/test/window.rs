@@ -54,6 +54,7 @@ pub(crate) struct TestWindowState {
     text_input_configurations: Vec<TextInputConfiguration>,
     text_input_state_changes: Vec<TextInputStateChange>,
     is_fullscreen: bool,
+    numlock: Option<bool>,
     scale_factor: f32,
     appearance: WindowAppearance,
     external_drag_files: Vec<(PathBuf, bool)>,
@@ -101,6 +102,7 @@ impl TestWindow {
             sprite_atlas,
             renderer,
             title: Default::default(),
+            numlock: None,
             edited: false,
             document_path: None,
             should_close_handler: None,
@@ -156,6 +158,11 @@ impl TestWindow {
 
     pub fn frame_scheduled(&self) -> bool {
         self.0.lock().frame_scheduled
+    }
+
+    /// Set the current Num Lock state reported by this test backend.
+    pub fn simulate_numlock_change(&self, on: bool) {
+        self.0.lock().numlock = Some(on);
     }
 
     pub fn simulate_visibility_change(&self, visibility: WindowVisibility) {
@@ -376,6 +383,10 @@ impl PlatformWindow for TestWindow {
 
     fn capslock(&self) -> crate::Capslock {
         crate::Capslock::default()
+    }
+
+    fn numlock(&self) -> Option<bool> {
+        self.0.lock().numlock
     }
 
     fn set_input_handler(&mut self, input_handler: PlatformInputHandler) {

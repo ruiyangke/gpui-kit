@@ -108,6 +108,28 @@ fn read_modifiers(native_event: &NSEvent) -> Modifiers {
     }
 }
 
+unsafe fn read_key_metadata(native_event: &NSEvent) -> gpui::KeyEventMetadata {
+    unsafe {
+        let text: *mut AnyObject = msg_send![
+            native_event,
+            charactersByApplyingModifiers: NSEventModifierFlags::empty()
+        ];
+        gpui::KeyEventMetadata {
+            unmodified_text: if text.is_null() {
+                None
+            } else {
+                Some(text.to_str().to_owned().into())
+            },
+            modifiers: read_modifiers(native_event),
+            caps_lock: native_event
+                .modifierFlags()
+                .contains(NSEventModifierFlags::CapsLock),
+            // NSNumericPadKeyMask identifies a key location, not Num Lock.
+            num_lock: false,
+        }
+    }
+}
+
 pub(crate) unsafe fn platform_input_from_native(
     native_event: *mut AnyObject,
     window_height: Option<Pixels>,
@@ -137,11 +159,15 @@ pub(crate) unsafe fn platform_input_from_native(
                 }))
             }
             NSEventType::KeyDown => Some(PlatformInput::KeyDown(KeyDownEvent {
+                physical_key: Some(gpui::PhysicalKey::Native(u32::from(native_event.keyCode()))),
+                key_metadata: Some(read_key_metadata(native_event)),
                 keystroke: parse_keystroke(native_event),
                 is_held: native_event.isARepeat(),
                 prefer_character_input: false,
             })),
             NSEventType::KeyUp => Some(PlatformInput::KeyUp(KeyUpEvent {
+                physical_key: Some(gpui::PhysicalKey::Native(u32::from(native_event.keyCode()))),
+                key_metadata: Some(read_key_metadata(native_event)),
                 keystroke: parse_keystroke(native_event),
             })),
             NSEventType::LeftMouseDown

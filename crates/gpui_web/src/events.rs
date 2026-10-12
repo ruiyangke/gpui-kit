@@ -549,11 +549,17 @@ impl WebWindowInner {
             key_char: None,
         };
         self.dispatch_input(PlatformInput::KeyDown(KeyDownEvent {
+            physical_key: None,
+            key_metadata: None,
             keystroke: keystroke.clone(),
             is_held: false,
             prefer_character_input: false,
         }));
-        self.dispatch_input(PlatformInput::KeyUp(KeyUpEvent { keystroke }));
+        self.dispatch_input(PlatformInput::KeyUp(KeyUpEvent {
+            physical_key: None,
+            key_metadata: None,
+            keystroke,
+        }));
     }
 
     fn register_pointer_move(self: &Rc<Self>) -> EventListenerHandle {
@@ -745,6 +751,8 @@ impl WebWindowInner {
             };
 
             let result = this.dispatch_input(PlatformInput::KeyDown(KeyDownEvent {
+                physical_key: physical_key_from_dom(&event),
+                key_metadata: None,
                 keystroke,
                 is_held,
                 prefer_character_input: false,
@@ -808,7 +816,11 @@ impl WebWindowInner {
                 key_char,
             };
 
-            let result = this.dispatch_input(PlatformInput::KeyUp(KeyUpEvent { keystroke }));
+            let result = this.dispatch_input(PlatformInput::KeyUp(KeyUpEvent {
+                physical_key: physical_key_from_dom(&event),
+                key_metadata: None,
+                keystroke,
+            }));
             if let Some(result) = result {
                 if !result.propagate {
                     event.prevent_default();
@@ -1478,4 +1490,9 @@ mod tests {
         assert_ne!(reused, first);
         assert_ne!(reused, concurrent);
     }
+}
+
+fn physical_key_from_dom(event: &web_sys::KeyboardEvent) -> Option<gpui::PhysicalKey> {
+    let code = event.code();
+    (!code.is_empty() && code != "Unidentified").then(|| gpui::PhysicalKey::Web(code.into()))
 }

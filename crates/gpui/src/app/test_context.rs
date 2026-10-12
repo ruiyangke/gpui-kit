@@ -1001,6 +1001,11 @@ impl VisualTestContext {
         })
     }
 
+    /// Set the current Num Lock state reported by the test platform.
+    pub fn simulate_numlock_change(&mut self, on: bool) {
+        self.test_window(self.window).simulate_numlock_change(on);
+    }
+
     /// Simulate a capslock changed event
     pub fn simulate_capslock_change(&mut self, on: bool) {
         self.simulate_event(ModifiersChangedEvent {

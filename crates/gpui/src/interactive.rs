@@ -20,11 +20,43 @@ pub trait MouseEvent: InputEvent {}
 /// A gesture event from the platform.
 pub trait GestureEvent: InputEvent {}
 
+/// An opaque physical key identity, independent of layout and modifiers.
+///
+/// Compare identities only within the current platform/backend. These values
+/// are not portable key bindings and must not be used to infer typed text.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum PhysicalKey {
+    /// The native backend's key/scancode, including extended-key information.
+    Native(u32),
+    /// A browser KeyboardEvent.code value identifying a physical key position.
+    Web(crate::SharedString),
+}
+
+/// Event-time native key information, independent of shortcut normalization.
+/// Synthetic events and backends without native metadata leave this absent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KeyEventMetadata {
+    /// Text produced by this physical key in the current layout with no modifiers.
+    pub unmodified_text: Option<crate::SharedString>,
+    /// Modifier state before layout-dependent shortcut normalization.
+    pub modifiers: Modifiers,
+    /// Whether Caps Lock is enabled at the time of the event.
+    pub caps_lock: bool,
+    /// Whether Num Lock is enabled at the time of the event.
+    pub num_lock: bool,
+}
+
 /// The key down event equivalent for the platform.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KeyDownEvent {
     /// The keystroke that was generated.
     pub keystroke: Keystroke,
+
+    /// Physical identity when available; absent for synthetic text-only events.
+    pub physical_key: Option<PhysicalKey>,
+
+    /// Native layout and modifier state before shortcut normalization.
+    pub key_metadata: Option<KeyEventMetadata>,
 
     /// Whether the key is currently held down.
     pub is_held: bool,
@@ -47,6 +79,12 @@ impl KeyEvent for KeyDownEvent {}
 pub struct KeyUpEvent {
     /// The keystroke that was released.
     pub keystroke: Keystroke,
+
+    /// Physical identity when available; absent for synthetic text-only events.
+    pub physical_key: Option<PhysicalKey>,
+
+    /// Native layout and modifier state before shortcut normalization.
+    pub key_metadata: Option<KeyEventMetadata>,
 }
 
 impl Sealed for KeyUpEvent {}

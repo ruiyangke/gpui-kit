@@ -710,6 +710,10 @@ impl PlatformWindow for WindowsWindow {
         current_capslock()
     }
 
+    fn numlock(&self) -> Option<bool> {
+        Some(unsafe { GetKeyState(VK_NUMLOCK.0 as i32) & 1 != 0 })
+    }
+
     fn set_input_handler(&mut self, input_handler: PlatformInputHandler) {
         self.state.input_handler.set(Some(input_handler));
     }

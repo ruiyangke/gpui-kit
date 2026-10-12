@@ -10,12 +10,12 @@ use block2::RcBlock;
 use dispatch2::DispatchQueue;
 use gpui::{
     AnyWindowHandle, BackgroundExecutor, Bounds, Capslock, CursorStyle, ExternalDragPayload,
-    ExternalPaths, FileDropEvent, ForegroundExecutor, FrameRequestSource, KeyDownEvent, Keystroke,
-    Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, PlatformAtlas, PlatformDisplay, PlatformFrameSignal, PlatformInput,
-    PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
-    SharedString, Size, SystemWindowTab, WindowAppearance, WindowBackgroundAppearance,
-    WindowBounds, WindowControlArea, WindowKind, WindowParams, WindowVisibility, point, px, size,
+    ExternalPaths, FileDropEvent, ForegroundExecutor, FrameRequestSource, KeyDownEvent, Modifiers,
+    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    PlatformAtlas, PlatformDisplay, PlatformFrameSignal, PlatformInput, PlatformInputHandler,
+    PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions, SharedString, Size,
+    SystemWindowTab, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
+    WindowKind, WindowParams, WindowVisibility, point, px, size,
 };
 #[cfg(any(test, feature = "test-support"))]
 use image::RgbaImage;
@@ -671,7 +671,7 @@ struct MacWindowState {
     pre_fullscreen_traffic_light_frames: Option<TrafficLightFrames>,
     transparent_titlebar: bool,
     previous_modifiers_changed_event: Option<PlatformInput>,
-    keystroke_for_do_command: Option<Keystroke>,
+    key_down_for_do_command: Option<KeyDownEvent>,
     do_command_handled: Option<bool>,
     external_files_dragged: bool,
     // Whether the next left-mouse click is also the focusing click.
@@ -1104,7 +1104,7 @@ impl MacWindow {
                     .as_ref()
                     .is_none_or(|titlebar| titlebar.appears_transparent),
                 previous_modifiers_changed_event: None,
-                keystroke_for_do_command: None,
+                key_down_for_do_command: None,
                 do_command_handled: None,
                 external_files_dragged: false,
                 first_mouse: false,
@@ -2714,7 +2714,7 @@ extern "C" fn handle_key_event(
             {
                 {
                     let mut lock = window_state.as_ref().lock();
-                    lock.keystroke_for_do_command = Some(key_down_event.keystroke.clone());
+                    lock.key_down_for_do_command = Some(key_down_event.clone());
                     lock.do_command_handled.take();
                     drop(lock);
                 }
@@ -2727,7 +2727,7 @@ extern "C" fn handle_key_event(
                         msg_send![input_context, handleEvent: native_event]
                     }
                 };
-                window_state.as_ref().lock().keystroke_for_do_command.take();
+                window_state.as_ref().lock().key_down_for_do_command.take();
                 if let Some(handled) = window_state.as_ref().lock().do_command_handled.take() {
                     return handled.to_objc();
                 } else if handled == Bool::YES {
@@ -3520,16 +3520,12 @@ extern "C" fn attributed_substring_for_proposed_range(
 extern "C" fn do_command_by_selector(this: &AnyObject, _: Sel, _: Sel) {
     let state = unsafe { get_window_state(this) };
     let mut lock = state.as_ref().lock();
-    let keystroke = lock.keystroke_for_do_command.take();
+    let key_down_event = lock.key_down_for_do_command.take();
     let mut event_callback = lock.event_callback.take();
     drop(lock);
 
-    if let Some((keystroke, callback)) = keystroke.zip(event_callback.as_mut()) {
-        let handled = (callback)(PlatformInput::KeyDown(KeyDownEvent {
-            keystroke,
-            is_held: false,
-            prefer_character_input: false,
-        }));
+    if let Some((key_down_event, callback)) = key_down_event.zip(event_callback.as_mut()) {
+        let handled = (callback)(PlatformInput::KeyDown(key_down_event));
         state.as_ref().lock().do_command_handled = Some(!handled.propagate);
     }
 
