@@ -91,9 +91,8 @@ impl ParentElement for MenuItemElement {
 
 impl RenderOnce for MenuItemElement {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        h_flex()
+        let root = h_flex()
             .id(self.id)
-            .test_support()
             .role(Role::MenuItem)
             .when_some(self.aria_label, |this, label| this.aria_label(label))
             .aria_selected(self.selected)
@@ -131,13 +130,121 @@ impl RenderOnce for MenuItemElement {
             .when(self.disabled, |this| {
                 this.text_color(cx.theme().muted_foreground)
             })
-            .children(self.children)
+            .children(self.children);
+        MenuItemSemantics {
+            inner: root,
+            disabled: self.disabled,
+        }
+        .test_support()
+    }
+}
+
+/// Amend this item's existing accessibility node without introducing a wrapper
+/// node or another focus stop, matching the Button semantics adapter.
+struct MenuItemSemantics<E: gpui::Element> {
+    inner: E,
+    disabled: bool,
+}
+impl<E: gpui::Element + InteractiveElement> InteractiveElement for MenuItemSemantics<E> {
+    fn interactivity(&mut self) -> &mut gpui::Interactivity {
+        self.inner.interactivity()
+    }
+}
+impl<E: gpui::Element> IntoElement for MenuItemSemantics<E> {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+impl<E: gpui::Element> gpui::Element for MenuItemSemantics<E> {
+    type RequestLayoutState = E::RequestLayoutState;
+    type PrepaintState = E::PrepaintState;
+    fn id(&self) -> Option<ElementId> {
+        self.inner.id()
+    }
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        self.inner.source_location()
+    }
+    fn request_layout(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
+        self.inner.request_layout(id, inspector, window, cx)
+    }
+    fn prepaint(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        self.inner
+            .prepaint(id, inspector, bounds, layout, window, cx)
+    }
+    fn paint(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<gpui::Pixels>,
+        layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.inner
+            .paint(id, inspector, bounds, layout, prepaint, window, cx)
+    }
+    fn a11y_role(&self) -> Option<Role> {
+        self.inner.a11y_role()
+    }
+    fn write_a11y_info(&self, node: &mut gpui::accesskit::Node) {
+        self.inner.write_a11y_info(node);
+        if self.disabled {
+            node.set_disabled();
+            node.remove_action(gpui::accesskit::Action::Click);
+        }
+    }
+    fn a11y_synthetic_children(
+        &mut self,
+        prepaint: &mut Self::PrepaintState,
+        builder: &mut gpui::A11ySubtreeBuilder,
+    ) {
+        self.inner.a11y_synthetic_children(prepaint, builder);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_semantics_amend_the_existing_menu_item() {
+        use gpui::Element;
+        for disabled in [false, true] {
+            let item = MenuItemSemantics {
+                inner: gpui::div()
+                    .id("item")
+                    .role(Role::MenuItem)
+                    .aria_label("Recreate"),
+                disabled,
+            };
+            let mut node = gpui::accesskit::Node::new(Role::MenuItem);
+            node.add_action(gpui::accesskit::Action::Click);
+            item.write_a11y_info(&mut node);
+            assert_eq!(item.a11y_role(), Some(Role::MenuItem));
+            assert_eq!(node.label(), Some("Recreate"));
+            assert_eq!(node.is_disabled(), disabled);
+            assert_eq!(
+                node.supports_action(gpui::accesskit::Action::Click),
+                !disabled
+            );
+        }
+    }
 
     #[gpui::test]
     fn aria_label_sets_accessible_name(_cx: &mut gpui::TestAppContext) {

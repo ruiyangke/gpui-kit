@@ -488,7 +488,7 @@ mod tests {
         fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
             self.renders.fetch_add(1, Ordering::Relaxed);
             div().child(
-                super::markdown(include_str!("../../../../examples/fixtures/test.md"))
+                super::markdown(include_str!("../../tests/fixtures/test.md"))
                     .markdown_block_parser(|_, _| None),
             )
         }

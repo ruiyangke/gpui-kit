@@ -224,6 +224,7 @@ pub(crate) struct TextWrapper {
     /// If is none, it means the text is not wrapped
     wrap_width: Option<Pixels>,
     wrapping_indent: WrappingIndent,
+    tab_size: usize,
     /// The lines by split \n
     pub(crate) lines: SumTree<LineItem>,
 
@@ -240,6 +241,7 @@ impl TextWrapper {
             font_size,
             wrap_width,
             wrapping_indent: WrappingIndent::default(),
+            tab_size: 2,
             lines: SumTree::new(&()),
             inline_metrics: Rc::from([]),
             _initialized: false,
@@ -334,6 +336,14 @@ impl TextWrapper {
         self.update_all(&self.text.clone(), cx);
     }
 
+    pub(crate) fn set_tab_size(&mut self, tab_size: usize, cx: &mut App) {
+        let tab_size = tab_size.max(1);
+        if self.tab_size != tab_size {
+            self.tab_size = tab_size;
+            self.update_all(&self.text.clone(), cx);
+        }
+    }
+
     pub(crate) fn set_font(&mut self, font: Font, font_size: Pixels, cx: &mut App) {
         if self.font.eq(&font) && self.font_size == font_size {
             return;
@@ -377,6 +387,8 @@ impl TextWrapper {
         let font = self.font.clone();
         let font_size = self.font_size;
         let wrapping_indent = self.wrapping_indent;
+        let font_id = text_system.resolve_font(&font);
+        let tab_width = text_system.layout_width(font_id, font_size, ' ') * self.tab_size as f32;
         self._update(
             changed_text,
             range,
@@ -410,21 +422,27 @@ impl TextWrapper {
                         wrap_width,
                         wrapping_indent,
                         |text| {
-                            text_system
-                                .layout_line(
-                                    text,
+                            let runs = [gpui::TextRun {
+                                len: text.len(),
+                                font: font.clone(),
+                                color: gpui::black(),
+                                background_color: None,
+                                underline: None,
+                                strikethrough: None,
+                            }];
+                            if !text.contains('\t') {
+                                return text_system.layout_line(text, font_size, &runs, None).width;
+                            }
+                            InputLine::with_tabs(
+                                text_system.shape_line(
+                                    text.to_owned().into(),
                                     font_size,
-                                    &[gpui::TextRun {
-                                        len: text.len(),
-                                        font: font.clone(),
-                                        color: gpui::black(),
-                                        background_color: None,
-                                        underline: None,
-                                        strikethrough: None,
-                                    }],
+                                    &runs,
                                     None,
-                                )
-                                .width
+                                ),
+                                tab_width,
+                            )
+                            .width
                         },
                     );
                 }

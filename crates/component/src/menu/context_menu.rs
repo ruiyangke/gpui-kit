@@ -173,13 +173,7 @@ struct DeferredMenu {
 }
 
 impl DeferredMenu {
-    fn build_menu(&self, window: &mut Window, cx: &mut App) -> AnyElement {
-        // Focus the menu, so that can be handle the action.
-        let focus_handle = self.menu_view.focus_handle(cx);
-        if !focus_handle.contains_focused(window, cx) {
-            focus_handle.focus(window, cx);
-        }
-
+    fn build_menu(&self, window: &mut Window) -> AnyElement {
         deferred(
             anchored().child(
                 div()
@@ -250,7 +244,7 @@ impl Element for DeferredMenu {
         if !self.draws.get() {
             return;
         }
-        let mut menu = self.build_menu(window, cx);
+        let mut menu = self.build_menu(window);
         menu.prepaint_as_root(bounds.origin, window.viewport_size().into(), window, cx);
         self.menu = Some(menu);
     }
@@ -434,6 +428,11 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
                                     menu.set_trigger_focus(trigger_focus_handle, cx);
                                     menu.set_previous_focus(previous_focus_handle, cx);
                                 });
+                                // Transfer focus before the next frame starts.
+                                // Doing this in DeferredMenu::prepaint can leave
+                                // both the old control and this menu marked as
+                                // focused in the same accessibility tree.
+                                menu.focus_handle(cx).focus(window, cx);
 
                                 // Set up the subscription for dismiss handling.
                                 // Hold a Weak here, not a strong clone: the closure
@@ -548,10 +547,12 @@ mod tests {
             click_count: 1,
             first_mouse: false,
         });
-        // The menu entity is built in a deferred callback, then rendered
-        // (which also focuses it) on the next draw.
+        // The deferred open must transfer focus before drawing: changing it
+        // during prepaint can register both controls as accessibility focus.
         cx.run_until_parked();
         cx.update(|window, cx| {
+            assert!(window.focused(cx).is_some());
+            assert_ne!(window.focused(cx).as_ref(), Some(&content_focus));
             _ = window.draw(cx);
         });
 

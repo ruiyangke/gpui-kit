@@ -163,6 +163,12 @@ impl AlertDialog {
         self
     }
 
+    /// Sets the accessible name of the alert dialog independently of title layout.
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.base = self.base.aria_label(label);
+        self
+    }
+
     /// Sets the title of the alert dialog.
     #[track_caller]
     pub fn title(mut self, title: impl IntoElement) -> Self {

@@ -1,12 +1,12 @@
 use crate::root::WindowState;
 use crate::{
-    Placement,
+    DialogHandle, Placement,
     dialog::{AlertDialog, Dialog},
     input::AnyInputState,
     notification::Notification,
     sheet::Sheet,
 };
-use gpui::{App, ElementId, Entity, Window};
+use gpui::{App, ElementId, Entity, FocusHandle, Window};
 use std::rc::Rc;
 
 /// Extension trait for [`Window`] to add dialog, sheet .. functionality.
@@ -55,6 +55,16 @@ pub trait WindowExt: Sized {
 
     /// Return true, if there is an active Dialog.
     fn has_active_dialog(&mut self, cx: &mut App) -> bool;
+
+    /// Captures the active dialog's identity for an owner-scoped close.
+    fn active_dialog_focus_handle(&self, cx: &App) -> Option<FocusHandle>;
+
+    /// Captures identity and liveness, including programmatic dismissal.
+    fn active_dialog_handle(&self, cx: &App) -> Option<DialogHandle>;
+
+    /// Closes only this dialog, including when another dialog covers it.
+    /// Returns false when the captured dialog has already been dismissed.
+    fn close_dialog_if(&mut self, focus: &FocusHandle, cx: &mut App) -> bool;
 
     /// Closes the last active Dialog.
     fn close_dialog(&mut self, cx: &mut App);
@@ -143,6 +153,20 @@ impl WindowExt for Window {
     #[inline]
     fn has_active_dialog(&mut self, cx: &mut App) -> bool {
         !WindowState::read(self, cx).active_dialogs.is_empty()
+    }
+
+    fn active_dialog_focus_handle(&self, cx: &App) -> Option<FocusHandle> {
+        WindowState::read(self, cx).active_dialog_focus_handle()
+    }
+
+    fn active_dialog_handle(&self, cx: &App) -> Option<DialogHandle> {
+        WindowState::read(self, cx).active_dialog_handle()
+    }
+
+    fn close_dialog_if(&mut self, focus: &FocusHandle, cx: &mut App) -> bool {
+        WindowState::update(self, cx, |root, window, cx| {
+            root.close_dialog_if(focus, window, cx)
+        })
     }
 
     #[inline]

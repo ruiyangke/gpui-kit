@@ -201,9 +201,11 @@ type ContentBuilderFn = Rc<dyn Fn(DialogContent, &mut Window, &mut App) -> Dialo
 
 #[derive(Clone)]
 pub(crate) struct DialogProps {
+    aria_label: Option<SharedString>,
     width: Pixels,
     max_width: Option<Pixels>,
     margin_top: Option<Pixels>,
+    centered: bool,
     close_button: bool,
 
     overlay: bool,
@@ -215,7 +217,9 @@ pub(crate) struct DialogProps {
 impl Default for DialogProps {
     fn default() -> Self {
         Self {
+            aria_label: None,
             margin_top: None,
+            centered: false,
             width: px(448.),
             max_width: None,
             overlay: true,
@@ -244,6 +248,9 @@ macro_rules! map_base_root {
 }
 
 impl BaseDialogRoot {
+    fn aria_label(self, label: SharedString) -> Self {
+        map_base_root!(self, aria_label(label))
+    }
     fn layer(self, index: usize, topmost: bool) -> Self {
         map_base_root!(self, layer(index, topmost))
     }
@@ -361,6 +368,13 @@ impl Dialog {
         self
     }
 
+    /// Sets the accessible name. Custom title elements cannot supply this
+    /// automatically; use the same text as the visible title.
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.props.aria_label = Some(label.into());
+        self
+    }
+
     /// Sets the title of the dialog.
     pub fn title(mut self, title: impl IntoElement) -> Self {
         self.title = Some(title.into_any_element());
@@ -441,6 +455,15 @@ impl Dialog {
     /// Set the top offset of the dialog, defaults to None, will use the 1/10 of the viewport height.
     pub fn margin_top(mut self, margin_top: impl Into<Pixels>) -> Self {
         self.props.margin_top = Some(margin_top.into());
+        self
+    }
+
+    /// Centers the dialog vertically using its measured content height.
+    ///
+    /// Defaults to `false`. When enabled, this takes precedence over
+    /// [`Self::margin_top`]; the dialog still keeps its viewport edge margin.
+    pub fn centered(mut self, centered: bool) -> Self {
+        self.props.centered = centered;
         self
     }
 
@@ -575,13 +598,37 @@ impl RenderOnce for Dialog {
         // margin so that the preferred offset does not waste usable height.
         let margin = cx.theme().spacing_tokens().lg;
         let layer_offset = px(layer_ix as f32 * 16.);
+        let centered = self.props.centered;
         let y = self.props.margin_top.unwrap_or(view_size.height / 10.) + layer_offset;
-        let width = self
-            .props
-            .width
-            .min((view_size.width - margin * 2.).max(px(0.)));
+        let preferred_width = if centered {
+            self.props
+                .width
+                .min(self.props.max_width.unwrap_or(self.props.width))
+        } else {
+            self.props.width
+        };
+        let width = preferred_width.min((view_size.width - margin * 2.).max(px(0.)));
         let x = (view_size.width - width) / 2.;
         let max_height = (view_size.height - margin * 2. - layer_offset).max(px(0.));
+        // A zero-size side anchor lets Positioner measure the actual surface
+        // before centering it; wrapped content needs no guessed height.
+        let positioner = if centered {
+            gpui_base::Positioner::side(gpui::Bounds::new(
+                point(
+                    window_paddings.left + x,
+                    window_paddings.top + view_size.height / 2. + layer_offset,
+                ),
+                gpui::size(px(0.), px(0.)),
+            ))
+            .placement(gpui_base::Placement::Right)
+            .align(gpui_base::Align::Center)
+            .offset(px(0.))
+        } else {
+            gpui_base::Positioner::corner(
+                Anchor::TopLeft,
+                point(window_paddings.left + x, window_paddings.top + y),
+            )
+        };
 
         let base_size = window.text_style().font_size;
         let rem_size = window.rem_size();
@@ -631,6 +678,9 @@ impl RenderOnce for Dialog {
                                     == WindowState::read(window, cx).active_dialogs.len(),
                             )
                             .focus_handle(self.focus_handle.clone())
+                            .when_some(self.props.aria_label.clone(), |root, label| {
+                                root.aria_label(label)
+                            })
                             .close_on_escape(self.props.keyboard)
                             .close_on_backdrop_press(self.props.overlay_closable)
                             .dismiss_below_y(TITLE_BAR_HEIGHT)
@@ -656,135 +706,143 @@ impl RenderOnce for Dialog {
                                 }
                             })
                             .popup(
-                                gpui_base::Positioner::corner(
-                                    Anchor::TopLeft,
-                                    point(window_paddings.left + x, window_paddings.top + y),
-                                )
-                                .margin(margin)
-                                .child(
-                                    v_flex()
-                                        .id(layer_ix)
-                                        .test_support()
-                                        .debug_selector(move || format!("dialog-{layer_ix}"))
-                                        .bg(cx.theme().tokens.background)
-                                        .border_1()
-                                        .border_color(cx.theme().border)
-                                        .rounded(cx.theme().radius_lg)
-                                        .min_h_24()
-                                        .pt(paddings.top)
-                                        .pb(paddings.bottom)
-                                        .gap(paddings.top.max(px(8.)))
-                                        .refine_style(&self.style)
-                                        .px_0()
-                                        .occlude()
-                                        .w(width)
-                                        .when_some(self.props.max_width, |this, w| this.max_w(w))
-                                        .max_h(max_height)
-                                        .child(
-                                            v_flex()
-                                                .flex_1()
-                                                .overflow_hidden()
-                                                .gap_y_2()
-                                                .when_some(self.header, |this, header| {
-                                                    this.child(
-                                                        div()
-                                                            .pl(paddings.left)
-                                                            .pr(paddings.right)
-                                                            .child(header),
-                                                    )
-                                                })
-                                                .when_some(self.title, |this, title| {
-                                                    this.child(
-                                                        DialogTitle::new()
-                                                            .pl(paddings.left)
-                                                            .pr(paddings.right)
-                                                            .child(title),
-                                                    )
-                                                })
-                                                .when_some(self.content_builder, |this, builder| {
-                                                    this.child(builder(
-                                                        DialogContent::new()
-                                                            .gap(paddings.bottom)
-                                                            .pl(paddings.left)
-                                                            .pr(paddings.right),
-                                                        window,
-                                                        cx,
-                                                    ))
-                                                })
-                                                .when(!self.children.is_empty(), |this| {
-                                                    this.child(
-                                                        div().flex_1().overflow_hidden().child(
-                                                            // Body
-                                                            v_flex()
-                                                                .size_full()
-                                                                .overflow_y_scrollbar()
+                                positioner
+                                    .margin(margin)
+                                    .child(
+                                        v_flex()
+                                            .id(layer_ix)
+                                            .test_support()
+                                            .debug_selector(move || format!("dialog-{layer_ix}"))
+                                            .bg(cx.theme().tokens.background)
+                                            .border_1()
+                                            .border_color(cx.theme().border)
+                                            .rounded(cx.theme().radius_lg)
+                                            .min_h_24()
+                                            .pt(paddings.top)
+                                            .pb(paddings.bottom)
+                                            .gap(paddings.top.max(px(8.)))
+                                            .refine_style(&self.style)
+                                            .px_0()
+                                            .occlude()
+                                            .w(width)
+                                            .when_some(self.props.max_width, |this, w| {
+                                                this.max_w(w)
+                                            })
+                                            .max_h(max_height)
+                                            .child(
+                                                v_flex()
+                                                    .flex_1()
+                                                    .overflow_hidden()
+                                                    .gap_y_2()
+                                                    .when_some(self.header, |this, header| {
+                                                        this.child(
+                                                            div()
                                                                 .pl(paddings.left)
                                                                 .pr(paddings.right)
-                                                                .children(self.children),
-                                                        ),
+                                                                .child(header),
+                                                        )
+                                                    })
+                                                    .when_some(self.title, |this, title| {
+                                                        this.child(
+                                                            DialogTitle::new()
+                                                                .pl(paddings.left)
+                                                                .pr(paddings.right)
+                                                                .child(title),
+                                                        )
+                                                    })
+                                                    .when_some(
+                                                        self.content_builder,
+                                                        |this, builder| {
+                                                            this.child(builder(
+                                                                DialogContent::new()
+                                                                    .gap(paddings.bottom)
+                                                                    .pl(paddings.left)
+                                                                    .pr(paddings.right),
+                                                                window,
+                                                                cx,
+                                                            ))
+                                                        },
                                                     )
-                                                }),
-                                        )
-                                        .when_some(self.footer, |this, footer| {
-                                            this.child(
-                                                div()
-                                                    .pl(paddings.left)
-                                                    .pr(paddings.right)
-                                                    .child(footer),
+                                                    .when(!self.children.is_empty(), |this| {
+                                                        this.child(
+                                                            div().flex_1().overflow_hidden().child(
+                                                                // Body
+                                                                v_flex()
+                                                                    .size_full()
+                                                                    .overflow_y_scrollbar()
+                                                                    .pl(paddings.left)
+                                                                    .pr(paddings.right)
+                                                                    .children(self.children),
+                                                            ),
+                                                        )
+                                                    }),
                                             )
-                                        })
-                                        .children(self.props.close_button.then(|| {
-                                            let top = (paddings.top - px(10.)).max(px(8.));
-                                            let right = (paddings.right - px(10.)).max(px(8.));
+                                            .when_some(self.footer, |this, footer| {
+                                                this.child(
+                                                    div()
+                                                        .pl(paddings.left)
+                                                        .pr(paddings.right)
+                                                        .child(footer),
+                                                )
+                                            })
+                                            .children(self.props.close_button.then(|| {
+                                                let top = (paddings.top - px(10.)).max(px(8.));
+                                                let right = (paddings.right - px(10.)).max(px(8.));
 
-                                            gpui_base::DialogClose::new()
-                                                .absolute()
-                                                .top(top)
-                                                .right(right)
-                                                .trigger(|button| {
-                                                    Button::new("close")
-                                                        .with_base(button)
-                                                        .small()
-                                                        .ghost()
-                                                        .icon(IconName::Close)
-                                                })
-                                        }))
-                                        .with_animation(
-                                            "slide-down-shadow",
-                                            animation.clone(),
-                                            move |this, delta| {
-                                                // This is equivalent to `shadow_xl` with an extra opacity.
-                                                let shadow = vec![
-                                                    BoxShadow {
-                                                        color: hsla(0., 0., 0., 0.1 * delta),
-                                                        offset: point(px(0.), px(20.)),
-                                                        blur_radius: px(25.),
-                                                        spread_radius: px(-5.),
-                                                        inset: false,
-                                                    },
-                                                    BoxShadow {
-                                                        color: hsla(0., 0., 0., 0.1 * delta),
-                                                        offset: point(px(0.), px(8.)),
-                                                        blur_radius: px(10.),
-                                                        spread_radius: px(-6.),
-                                                        inset: false,
-                                                    },
-                                                ];
-                                                this.shadow(shadow)
-                                            },
-                                        )
-                                        .text_selection_scope(selection_scope),
-                                )
-                                .with_animation(
-                                    "slide-down",
-                                    animation.clone(),
-                                    move |this, delta| {
-                                        this.position(point(
-                                            window_paddings.left + x,
-                                            window_paddings.top + y * delta,
-                                        ))
-                                    },
-                                ),
+                                                gpui_base::DialogClose::new()
+                                                    .absolute()
+                                                    .top(top)
+                                                    .right(right)
+                                                    .trigger(|button| {
+                                                        Button::new("close")
+                                                            .with_base(button)
+                                                            .small()
+                                                            .ghost()
+                                                            .icon(IconName::Close)
+                                                    })
+                                            }))
+                                            .with_animation(
+                                                "slide-down-shadow",
+                                                animation.clone(),
+                                                move |this, delta| {
+                                                    // This is equivalent to `shadow_xl` with an extra opacity.
+                                                    let shadow = vec![
+                                                        BoxShadow {
+                                                            color: hsla(0., 0., 0., 0.1 * delta),
+                                                            offset: point(px(0.), px(20.)),
+                                                            blur_radius: px(25.),
+                                                            spread_radius: px(-5.),
+                                                            inset: false,
+                                                        },
+                                                        BoxShadow {
+                                                            color: hsla(0., 0., 0., 0.1 * delta),
+                                                            offset: point(px(0.), px(8.)),
+                                                            blur_radius: px(10.),
+                                                            spread_radius: px(-6.),
+                                                            inset: false,
+                                                        },
+                                                    ];
+                                                    this.shadow(shadow)
+                                                },
+                                            )
+                                            .text_selection_scope(selection_scope),
+                                    )
+                                    .with_animation(
+                                        "slide-down",
+                                        animation.clone(),
+                                        move |this, delta| {
+                                            if centered {
+                                                // Centered dialogs fade in without replacing the
+                                                // measured side anchor with a corner animation.
+                                                this
+                                            } else {
+                                                this.position(point(
+                                                    window_paddings.left + x,
+                                                    window_paddings.top + y * delta,
+                                                ))
+                                            }
+                                        },
+                                    ),
                             ),
                     )
                     .with_animation("fade-in", animation, move |this, delta| this.opacity(delta)),
@@ -842,6 +900,36 @@ pub(crate) mod tests {
             .unwrap_or_else(|| panic!("dialog layer {layer_ix} was not painted"))
     }
 
+    #[cfg(feature = "test-support")]
+    #[gpui::test]
+    fn custom_titles_have_named_dialog_hosts_without_losing_roles(cx: &mut TestAppContext) {
+        let cx = window(cx, size(px(600.), px(500.)));
+        for (alert, role, name) in [
+            (false, gpui::Role::Dialog, "Edit forward"),
+            (true, gpui::Role::AlertDialog, "Delete forward?"),
+        ] {
+            open(cx, move |dialog, _, cx| {
+                dialog
+                    .when(alert, |dialog| {
+                        dialog.with_base_alert_dialog(gpui_base::AlertDialog::new(cx))
+                    })
+                    .aria_label(name)
+                    .title(div().child(name))
+                    .child("Body")
+            });
+            cx.update(|window, _| {
+                let nodes = gpui_base::test_support::snapshots(window);
+                let host = nodes
+                    .iter()
+                    .find(|node| node.role() == Some(role))
+                    .expect("semantic dialog host");
+                assert_eq!(host.label(), Some(name));
+            });
+            cx.update(|window, cx| window.close_dialog(cx));
+            cx.run_until_parked();
+        }
+    }
+
     /// The clamp must not touch a dialog that already fits: the default width
     /// and the tenth-of-the-viewport top offset are the documented contract.
     #[gpui::test]
@@ -853,6 +941,81 @@ pub(crate) mod tests {
         assert_eq!(bounds.size.width, px(448.));
         assert_eq!(bounds.origin.x, px(276.));
         assert_eq!(bounds.origin.y, px(80.));
+    }
+
+    #[gpui::test]
+    fn centered_dialog_uses_measured_height_and_recenters_after_resize(cx: &mut TestAppContext) {
+        let viewport = size(px(1000.), px(800.));
+        let cx = window(cx, viewport);
+        open(cx, |dialog, _, _| {
+            dialog
+                .centered(true)
+                .margin_top(px(12.))
+                .w(px(600.))
+                .max_w(px(420.))
+                .title("Centered confirmation")
+                .child(
+                    div()
+                        .h(px(143.))
+                        .child("content with its own measured height"),
+                )
+                .footer(div().h(px(32.)))
+        });
+
+        let bounds = surface(cx, 0);
+        assert_eq!(bounds.size.width, px(420.));
+        assert_eq!(bounds.center().x, viewport.width / 2.);
+        assert!(
+            (bounds.center().y - viewport.height / 2.).abs() <= px(0.5),
+            "{bounds:?}"
+        );
+
+        let resized = size(px(800.), px(600.));
+        cx.simulate_resize(resized);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let bounds = surface(cx, 0);
+        assert_eq!(bounds.center().x, resized.width / 2.);
+        assert!(
+            (bounds.center().y - resized.height / 2.).abs() <= px(0.5),
+            "{bounds:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn centered_dialog_clamps_to_small_viewport_and_keeps_footer_visible(cx: &mut TestAppContext) {
+        let viewport = size(px(400.), px(300.));
+        let cx = window(cx, viewport);
+        open(cx, |dialog, _, _| {
+            dialog
+                .centered(true)
+                .w(px(800.))
+                .title("Constrained confirmation")
+                .child(div().h(px(1000.)).child("tall body"))
+                .footer(div().h(px(32.)).debug_selector(|| "centered-footer".into()))
+        });
+
+        let bounds = surface(cx, 0);
+        let footer = cx.debug_bounds("centered-footer").unwrap();
+        let margin = px(16.);
+        assert_eq!(bounds.origin, point(margin, margin));
+        assert_eq!(bounds.size, viewport - size(margin * 2., margin * 2.));
+        assert!(
+            footer.top() >= bounds.top() && footer.bottom() <= bounds.bottom(),
+            "footer {footer:?}, dialog {bounds:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn disabling_centered_restores_explicit_top_margin(cx: &mut TestAppContext) {
+        let cx = window(cx, size(px(1000.), px(800.)));
+        open(cx, |dialog, _, _| {
+            dialog
+                .centered(true)
+                .centered(false)
+                .margin_top(px(123.))
+                .child("body")
+        });
+        assert_eq!(surface(cx, 0).origin.y, px(123.));
     }
 
     /// A dialog wider and taller than the window must shrink to the viewport

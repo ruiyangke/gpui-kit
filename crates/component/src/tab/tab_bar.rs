@@ -48,7 +48,9 @@ pub struct TabBar {
     last_empty_space: AnyElement,
     selected_index: Option<usize>,
     variant: TabVariant,
+    subtle: bool,
     size: Size,
+    label_size: Option<Pixels>,
     menu: bool,
     max_width: Option<Pixels>,
     on_click: Option<Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>>,
@@ -67,13 +69,34 @@ impl TabBar {
             prefix: None,
             suffix: None,
             variant: TabVariant::default(),
+            subtle: false,
             size: Size::default(),
+            label_size: None,
             last_empty_space: div().w_3().into_any_element(),
             selected_index: None,
             on_click: None,
             menu: false,
             max_width: None,
         }
+    }
+
+    /// Use compact native-style tabs: 26px tabs in a 38px bar, no indicator or border.
+    /// All children inherit this appearance while retaining their interaction handlers.
+    pub fn subtle(mut self) -> Self {
+        self.subtle = true;
+        self
+    }
+
+    /// Set the label size for all tabs independently from their height.
+    pub fn label_size(mut self, size: Pixels) -> Self {
+        self.label_size = Some(size);
+        self
+    }
+
+    /// Give the tab list an accessible name independently of its tab labels.
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.base = self.base.aria_label(label);
+        self
     }
 
     /// Set the Tab variant, all children will inherit the variant.
@@ -188,10 +211,11 @@ impl TabBar {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<(AnyElement, u64)> {
-        let has_indicator = matches!(
-            self.variant,
-            TabVariant::Segmented | TabVariant::Pill | TabVariant::Underline
-        );
+        let has_indicator = !self.subtle
+            && matches!(
+                self.variant,
+                TabVariant::Segmented | TabVariant::Pill | TabVariant::Underline
+            );
         let num_tabs = self.children.len();
         let selected_ix = self.selected_index.unwrap_or(usize::MAX);
 
@@ -403,10 +427,17 @@ impl RenderOnce for TabBar {
             }
         };
 
-        let has_indicator = matches!(
-            self.variant,
-            TabVariant::Segmented | TabVariant::Pill | TabVariant::Underline
-        );
+        let (bg, paddings, gap) = if self.subtle {
+            (cx.theme().transparent.into(), Edges::all(px(0.)), px(3.))
+        } else {
+            (bg, paddings, gap)
+        };
+
+        let has_indicator = !self.subtle
+            && matches!(
+                self.variant,
+                TabVariant::Segmented | TabVariant::Pill | TabVariant::Underline
+            );
         let num_tabs = self.children.len();
 
         // Bounds tracking for tab indicator animation.
@@ -446,7 +477,9 @@ impl RenderOnce for TabBar {
                 .tab_bar_prefix(tab_bar_prefix)
                 .max_width(max_width)
                 .with_variant(self.variant)
-                .with_size(self.size);
+                .with_size(self.size)
+                .when(self.subtle, |tab| tab.subtle());
+            tab.label_size = self.label_size;
             tab.indicator_active = has_indicator;
             tab.indicator_ready = indicator_ready;
             tab.indicator_epoch = indicator_epoch;
@@ -499,7 +532,8 @@ impl RenderOnce for TabBar {
             .bg(bg)
             .text_color(cx.theme().tab_foreground)
             .when(
-                self.variant == TabVariant::Underline || self.variant == TabVariant::Tab,
+                !self.subtle
+                    && (self.variant == TabVariant::Underline || self.variant == TabVariant::Tab),
                 |this| {
                     this.child(
                         div()
@@ -515,6 +549,7 @@ impl RenderOnce for TabBar {
             )
             .rounded(self.variant.tab_bar_radius(self.size, cx))
             .paddings(paddings)
+            .when(self.subtle, |this| this.h(px(38.)).rounded(px(0.)))
             .refine_style(&self.style)
             .when_some(self.prefix, |this, prefix| this.child(prefix))
             .child(
@@ -595,6 +630,39 @@ mod tests {
 
     use super::*;
 
+    #[gpui::test]
+    fn accessible_tab_list_name_forwards_to_the_base_node(cx: &mut TestAppContext) {
+        use gpui::{Element as _, Role, accesskit, canvas};
+        use std::sync::{Arc, Mutex};
+
+        struct Probe(Arc<Mutex<Option<accesskit::Node>>>);
+        impl Render for Probe {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let captured = self.0.clone();
+                canvas(
+                    move |_, window, cx| {
+                        let mut node = accesskit::Node::new(Role::TabList);
+                        TabBar::new("details")
+                            .accessibility_label("Details")
+                            .base
+                            .render(window, cx)
+                            .into_element()
+                            .write_a11y_info(&mut node);
+                        *captured.lock().unwrap() = Some(node);
+                    },
+                    |_, _, _, _| {},
+                )
+            }
+        }
+        let captured = Arc::new(Mutex::new(None));
+        let result = captured.clone();
+        let (_, cx) = cx.add_window_view(move |_, _| Probe(captured));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let node = result.lock().unwrap().take().unwrap();
+        assert_eq!(node.role(), Role::TabList);
+        assert_eq!(node.label(), Some("Details"));
+    }
+
     struct Harness {
         group_handler: bool,
         disabled: bool,
@@ -672,6 +740,141 @@ mod tests {
         cx.simulate_click(position, Modifiers::default());
         assert_eq!(child_clicks.get(), 0);
         assert_eq!(group_clicks.get(), 0);
+    }
+
+    struct SubtleHarness {
+        clicks: Rc<Cell<usize>>,
+    }
+    impl Render for SubtleHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let clicks = self.clicks.clone();
+            div().child(
+                div().debug_selector(|| "subtle-bar".into()).child(
+                    TabBar::new("subtle-tabs")
+                        .segmented()
+                        .subtle()
+                        .selected_index(0)
+                        .on_click(move |ix, _, _| clicks.set(*ix + 1))
+                        .child(
+                            Tab::new()
+                                .label("First")
+                                .debug_selector(|| "subtle-first".into()),
+                        )
+                        .child(
+                            Tab::new()
+                                .label("Second")
+                                .debug_selector(|| "subtle-second".into()),
+                        )
+                        .child(
+                            Tab::new()
+                                .label("Disabled")
+                                .disabled(true)
+                                .debug_selector(|| "subtle-disabled".into()),
+                        ),
+                ),
+            )
+        }
+    }
+    #[gpui::test]
+    fn subtle_tabs_keep_compact_geometry_and_selection_callbacks(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+        let clicks = Rc::new(Cell::new(0));
+        let (_, cx) = cx.add_window_view({
+            let clicks = clicks.clone();
+            move |_, _| SubtleHarness { clicks }
+        });
+        draw(cx);
+        let bar = cx.debug_bounds("subtle-bar").unwrap();
+        let first = cx.debug_bounds("subtle-first").unwrap();
+        let second = cx.debug_bounds("subtle-second").unwrap();
+        assert_eq!(bar.size.height, px(38.));
+        assert_eq!(first.size.height, px(26.));
+        assert_eq!(first.top() - bar.top(), px(6.));
+        assert_eq!(second.left() - first.right(), px(3.));
+        cx.simulate_click(second.center(), Modifiers::default());
+        assert_eq!(clicks.get(), 2);
+        let disabled = cx.debug_bounds("subtle-disabled").unwrap().center();
+        cx.simulate_click(disabled, Modifiers::default());
+        assert_eq!(clicks.get(), 2);
+    }
+
+    struct RovingFocusHarness {
+        tabs: [gpui::FocusHandle; 3],
+        before: gpui::FocusHandle,
+        after: gpui::FocusHandle,
+        active: usize,
+    }
+
+    impl Render for RovingFocusHarness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .id("before-tabs")
+                        .track_focus(&self.before)
+                        .child("Before"),
+                )
+                .child(
+                    TabBar::new("roving-tabs")
+                        .subtle()
+                        .selected_index(self.active)
+                        .children(self.tabs.iter().enumerate().map(|(index, focus)| {
+                            // With an explicitly tracked handle, GPUI reads the tab
+                            // stop from the handle, not the element's .tab_stop().
+                            Tab::new()
+                                .label(format!("Tab {index}"))
+                                .track_focus(&focus.clone().tab_stop(index == self.active))
+                        })),
+                )
+                .child(
+                    div()
+                        .id("after-tabs")
+                        .track_focus(&self.after)
+                        .child("After"),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn tracked_tab_handles_roving_focus_skips_unselected_tabs(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+        let (view, cx) = cx.add_window_view(|_, cx| RovingFocusHarness {
+            tabs: std::array::from_fn(|_| cx.focus_handle()),
+            before: cx.focus_handle().tab_stop(true),
+            after: cx.focus_handle().tab_stop(true),
+            active: 1,
+        });
+        draw(cx);
+        for active in [1, 2, 0] {
+            view.update(cx, |view, cx| {
+                view.active = active;
+                cx.notify();
+            });
+            draw(cx);
+            cx.update(|window, cx| {
+                let before = view.read(cx).before.clone();
+                before.focus(window, cx);
+                window.focus_next(cx);
+                assert!(
+                    view.read(cx).tabs[active].is_focused(window),
+                    "selected tab must be the only tab stop"
+                );
+                window.focus_next(cx);
+                assert!(
+                    view.read(cx).after.is_focused(window),
+                    "unselected tabs must be skipped going forward"
+                );
+                window.focus_prev(cx);
+                assert!(view.read(cx).tabs[active].is_focused(window));
+                window.focus_prev(cx);
+                assert!(
+                    view.read(cx).before.is_focused(window),
+                    "unselected tabs must be skipped going backward"
+                );
+            });
+        }
     }
 
     struct ContentHarness;

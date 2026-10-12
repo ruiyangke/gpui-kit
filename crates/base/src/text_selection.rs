@@ -629,7 +629,7 @@ fn resolve_copy_items(mut items: Vec<CopyItem>, cx: &mut App) -> String {
                 .map(|callback| callback(cx))
                 .unwrap_or(item.fallback)
         })
-        .filter(|text| !text.trim().is_empty())
+        .filter(|text| !text.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
 }
