@@ -72,7 +72,12 @@ impl SelectableText {
         self
     }
 
-    fn paint_selection(
+    /// Paints a UTF-8 byte selection using the same wrapped-line geometry as
+    /// this element. Virtualized plain-text adapters can retain document
+    /// endpoints through [`TextSelectionHandle`] and reuse this renderer for
+    /// the visible portion of their selection. The range must be valid for
+    /// the text used to shape `layout`.
+    pub fn paint_selection(
         layout: &gpui::TextLayout,
         range: Range<usize>,
         color: Hsla,

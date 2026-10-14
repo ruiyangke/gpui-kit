@@ -1,11 +1,13 @@
+use gpui_base::TestSupportExt as _;
 use ropey::Rope;
 use rust_i18n::t;
 use std::ops::Range;
 
 use gpui::{
     App, AppContext as _, Context, Empty, Entity, FocusHandle, Focusable, Half,
-    InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, Styled, Subscription,
-    WeakEntity, Window, actions, div, prelude::FluentBuilder as _,
+    InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render,
+    StatefulInteractiveElement as _, Styled, Subscription, WeakEntity, Window, actions, div,
+    prelude::FluentBuilder as _,
 };
 
 use crate::{
@@ -356,9 +358,12 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                             .gap_1()
                             .child(
                                 Input::new(&self.search_input)
+                                    .aria_label(t!("Input.Find in text"))
                                     .focus_bordered(false)
                                     .suffix(
                                         Button::new("case-insensitive")
+                                            .accessibility_label(t!("Input.Match case"))
+                                            .tooltip(t!("Input.Match case"))
                                             .selected(!self.session.case_insensitive)
                                             .toggled(!self.session.case_insensitive)
                                             .xsmall()
@@ -386,6 +391,8 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                     .when(allow_replace, |this| {
                         this.child(
                             Button::new("replace-mode")
+                                .accessibility_label(t!("Input.Toggle replace"))
+                                .tooltip(t!("Input.Toggle replace"))
                                 .xsmall()
                                 .ghost()
                                 .icon(IconName::Replace)
@@ -398,6 +405,8 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                     })
                     .child(
                         Button::new("prev")
+                            .accessibility_label(t!("Input.Previous match"))
+                            .tooltip(t!("Input.Previous match"))
                             .xsmall()
                             .ghost()
                             .icon(IconName::ChevronLeft)
@@ -408,6 +417,8 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                     )
                     .child(
                         Button::new("next")
+                            .accessibility_label(t!("Input.Next match"))
+                            .tooltip(t!("Input.Next match"))
                             .xsmall()
                             .ghost()
                             .icon(IconName::ChevronRight)
@@ -417,7 +428,23 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                             })),
                     )
                     .child(
-                        Label::new(self.session.matcher.label())
+                        div()
+                            .id("search-result-count")
+                            .role(gpui::accesskit::Role::Status)
+                            .aria_label(if has_matches {
+                                t!(
+                                    "Input.Match count",
+                                    current = self.session.matcher.current_match_index() + 1,
+                                    total = self.session.matcher.len()
+                                )
+                                .into_owned()
+                            } else if self.query(cx).len() == 0 {
+                                t!("Input.Enter search text").into_owned()
+                            } else {
+                                t!("Input.No matches").into_owned()
+                            })
+                            .test_support()
+                            .child(Label::new(self.session.matcher.label()))
                             .when(!has_matches, |this| {
                                 this.text_color(cx.theme().muted_foreground)
                             })
@@ -427,6 +454,8 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                     .child(div().w_7())
                     .child(
                         Button::new("close")
+                            .accessibility_label(t!("Input.Close search"))
+                            .tooltip(t!("Input.Close search"))
                             .xsmall()
                             .ghost()
                             .icon(IconName::Close)
@@ -442,6 +471,7 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                         .gap_2()
                         .child(
                             Input::new(&self.replace_input)
+                                .aria_label(t!("Input.Replace with"))
                                 .focus_bordered(false)
                                 .small()
                                 .w(self.input_width)

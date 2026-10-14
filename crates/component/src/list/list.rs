@@ -21,6 +21,7 @@ use gpui::{
     AppContext, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
     Length, MouseButton, ParentElement, Render, Styled, Task, Window, div, prelude::FluentBuilder,
 };
+use gpui_base::TestSupportExt as _;
 use rust_i18n::t;
 
 pub(crate) fn init(cx: &mut App) {
@@ -486,10 +487,13 @@ where
         let id = SharedString::from(format!("list-item-{}", ix));
 
         let total_items = self.rows_cache.items_count();
+        let accessibility_label = self.delegate.item_accessibility_label(ix, cx);
 
         div()
             .id(id)
+            .test_support()
             .role(Role::ListItem)
+            .when_some(accessibility_label, |this, label| this.aria_label(label))
             .aria_position_in_set(ix.row + 1)
             .aria_size_of_set(total_items)
             .aria_selected(selected)
@@ -899,6 +903,50 @@ mod measurement_tests {
                 list.update(cx, |list, cx| {
                     let element = list.render(window, cx).into_element();
                     assert_eq!(element.a11y_role(), Some(Role::List));
+                });
+                div()
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn searchable_rows_name_the_native_list_item_host_after_filtering(cx: &mut TestAppContext) {
+        use crate::searchable_list::{SearchableVec, adapter::SearchableListAdapter};
+
+        cx.update(crate::init);
+        let window = cx.add_empty_window();
+        window.draw(
+            gpui::point(px(0.), px(0.)),
+            size(px(300.), px(300.)),
+            |window, cx| {
+                let list = cx.new(|cx| {
+                    ListState::new(
+                        SearchableListAdapter::new(
+                            SearchableVec::new(vec!["SSH agent", "Private key"]),
+                            |_, _, _, _| {},
+                            |_, _, _| {},
+                            |_, _| div().into_any_element(),
+                        ),
+                        window,
+                        cx,
+                    )
+                });
+                list.update(cx, |list, cx| {
+                    // Inspect the outer row hooks used by GPUI, not the inner
+                    // visual title. A filtered row index now identifies a
+                    // different item and must expose its updated name.
+                    for labels in [vec!["SSH agent", "Private key"], vec!["Private key"]] {
+                        list.delegate.delegate = SearchableVec::new(labels.clone());
+                        for (index, name) in labels.into_iter().enumerate() {
+                            let row = list
+                                .render_list_item(IndexPath::new(index), window, cx)
+                                .into_element();
+                            assert_eq!(row.a11y_role(), Some(Role::ListItem));
+                            let mut node = gpui::accesskit::Node::new(Role::ListItem);
+                            row.write_a11y_info(&mut node);
+                            assert_eq!(node.label(), Some(name));
+                        }
+                    }
                 });
                 div()
             },

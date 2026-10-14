@@ -31,6 +31,7 @@ inspector = ["gpui/inspector", "gpui-base/inspector", "gpui-component?/inspector
 decimal = ["component", "gpui-component/decimal"]
 # Speech input: microphone capture and the system speech recognizer.
 speech = ["component", "gpui-component/speech"]
+external-grammars = ["component", "gpui-component/external-grammars"]
 tree-sitter = ["component", "gpui-component/tree-sitter"]
 tree-sitter-languages = ["component", "gpui-component/tree-sitter-languages"]
 tree-sitter-astro = ["component", "gpui-component/tree-sitter-astro"]

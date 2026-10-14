@@ -2585,7 +2585,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             .last_layout
             .as_ref()
             .map(|layout| layout.line_height)
-            .unwrap_or(window.line_height());
+            .unwrap_or_else(|| super::element::text_line_height(window));
         let delta = event.delta.pixel_delta(line_height);
 
         let old_offset = self.scroll_handle.offset();

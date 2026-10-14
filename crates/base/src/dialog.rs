@@ -6,9 +6,9 @@ use std::{
 
 use gpui::{
     AnyElement, App, ClickEvent, FocusHandle, InteractiveElement as _, IntoElement, KeyBinding,
-    MouseButton, ParentElement, Pixels, RenderOnce, Role, StatefulInteractiveElement as _,
-    StyleRefinement, Styled, Window, anchored, deferred, div, point, prelude::FluentBuilder as _,
-    px,
+    MouseButton, ParentElement, Pixels, RenderOnce, Role, SharedString,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, anchored, deferred, div,
+    point, prelude::FluentBuilder as _, px,
 };
 use smallvec::SmallVec;
 
@@ -125,6 +125,7 @@ pub struct Dialog {
     style: StyleRefinement,
     focus: FocusHandle,
     role: Role,
+    aria_label: Option<SharedString>,
     layer: usize,
     keyboard: bool,
     overlay_closable: bool,
@@ -426,6 +427,7 @@ impl Dialog {
             style: StyleRefinement::default(),
             focus: cx.focus_handle(),
             role: Role::Dialog,
+            aria_label: None,
             layer: 0,
             keyboard: true,
             overlay_closable: true,
@@ -486,6 +488,12 @@ impl Dialog {
         self.dismiss_below_y = value;
         self
     }
+    /// Accessible name for the modal host, independent of visual title content.
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.aria_label = Some(label.into());
+        self
+    }
+
     pub(crate) fn role(mut self, role: Role) -> Self {
         self.role = role;
         self
@@ -561,6 +569,7 @@ impl RenderOnce for Dialog {
                     .items_center()
                     .justify_center()
                     .role(self.role)
+                    .when_some(self.aria_label, |this, label| this.aria_label(label))
                     .track_focus(&self.focus)
                     .focus_trap(format!("dialog-{}", self.layer), &self.focus)
                     .when(self.keyboard, |this| this.key_context(CONTEXT))

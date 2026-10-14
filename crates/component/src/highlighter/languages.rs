@@ -368,6 +368,12 @@ impl Language {
     /// Return the language info for the language.
     ///
     /// (language, query, injection, locals)
+    #[cfg(feature = "external-grammars")]
+    pub(super) fn config(&self) -> GrammarConfig {
+        GrammarConfig::plain(self.name())
+    }
+
+    #[cfg(not(feature = "external-grammars"))]
     pub(super) fn config(&self) -> GrammarConfig {
         let (language, query, injection, locals) = match self {
             Self::Plain => return GrammarConfig::plain(self.name()),

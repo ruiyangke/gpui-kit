@@ -57,7 +57,7 @@ where
         delegate: D,
         selected_indices: Vec<IndexPath>,
         on_confirm: impl Fn(
-            Option<IndexPath>,
+            Option<D::Item>,
             bool,
             &mut Window,
             &mut Context<ListState<SearchableListAdapter<D>>>,

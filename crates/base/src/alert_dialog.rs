@@ -223,6 +223,10 @@ impl AlertDialog {
         self.0 = self.0.popup(element);
         self
     }
+    pub fn aria_label(mut self, label: impl Into<gpui::SharedString>) -> Self {
+        self.0 = self.0.aria_label(label);
+        self
+    }
     pub fn close_on_escape(mut self, value: bool) -> Self {
         self.0 = self.0.close_on_escape(value);
         self

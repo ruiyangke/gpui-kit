@@ -20,9 +20,12 @@ pub struct Switch {
     label: Option<Text>,
     /// The announced name, when the visible label is not it.
     accessibility_label: Option<SharedString>,
+    accessibility_description: Option<SharedString>,
     label_side: Side,
     on_click: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
     size: Size,
+    track_size: Option<gpui::Size<gpui::Pixels>>,
+    label_size: Option<gpui::Pixels>,
     color: Option<Hsla>,
     tooltip: ComponentTooltip,
     tab_stop: bool,
@@ -41,9 +44,12 @@ impl Switch {
             disabled: false,
             label: None,
             accessibility_label: None,
+            accessibility_description: None,
             on_click: None,
             label_side: Side::Right,
             size: Size::Medium,
+            track_size: None,
+            label_size: None,
             color: None,
             tooltip: ComponentTooltip::default(),
             tab_stop: true,
@@ -55,6 +61,21 @@ impl Switch {
     /// Set the checked state of the switch.
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = checked;
+        self
+    }
+
+    /// Set track geometry independently of the surrounding label/hit target.
+    pub fn track_size(mut self, size: gpui::Size<gpui::Pixels>) -> Self {
+        self.track_size = Some(gpui::size(
+            size.width.max(size.height).max(px(4.)),
+            size.height.max(px(4.)),
+        ));
+        self
+    }
+
+    /// Set the visible label size without changing the switch geometry.
+    pub fn label_size(mut self, size: gpui::Pixels) -> Self {
+        self.label_size = Some(size);
         self
     }
 
@@ -72,6 +93,12 @@ impl Switch {
     /// displayed.
     pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
         self.accessibility_label = Some(label.into());
+        self
+    }
+
+    /// Supplementary help announced after the switch's name and value.
+    pub fn accessibility_description(mut self, description: impl Into<SharedString>) -> Self {
+        self.accessibility_description = Some(description.into());
         self
     }
 
@@ -184,22 +211,33 @@ impl RenderOnce for Switch {
         let unchecked_bg: Background = cx.theme().tokens.switch.into();
         // GPUI's element opacity multiplies each primitive's alpha instead of
         // compositing the subtree as one group, so fading the whole control
-        // would let the track show through the thumb. Fading the track alone
-        // lands on the pixels a grouped fade would: the thumb is `background`.
+        // would let the track show through the thumb. Fade the track and blend
+        // a solid thumb against the surface separately, keeping it opaque.
+        // A custom thumb (such as Newport's white thumb in dark mode) must
+        // fade too; it need not be the same color as the surface.
         let disabled_bg = if checked { checked_bg } else { unchecked_bg }.opacity(0.5);
         let toggle_bg: Background = cx.theme().tokens.switch_thumb.into();
+        let disabled_toggle_bg = toggle_bg
+            .as_solid()
+            .map(|color| Background::from(cx.theme().background.blend(color.opacity(0.5))))
+            .unwrap_or(toggle_bg);
         let disabled_label_color = cx.theme().muted_foreground;
 
-        let (bg_width, bg_height) = match self.size {
+        let (mut bg_width, mut bg_height) = match self.size {
             Size::XSmall | Size::Small => (px(28.), px(16.)),
             Size::Large => (px(44.), px(24.)),
             _ => (px(36.), px(20.)),
         };
-        let bar_width = match self.size {
+        let mut bar_width = match self.size {
             Size::XSmall | Size::Small => px(12.),
             Size::Large => px(20.),
             _ => px(16.),
         };
+        if let Some(size) = self.track_size {
+            bg_width = size.width;
+            bg_height = size.height;
+            bar_width = bg_height - px(4.);
+        }
         let inset = px(2.);
         let radius = if cx.theme().radius >= px(4.) {
             bg_height
@@ -235,6 +273,9 @@ impl RenderOnce for Switch {
                 })
                 .when_some(accessibility_label, |this, label| {
                     this.accessibility_label(label)
+                })
+                .when_some(self.accessibility_description, |this, description| {
+                    gpui::StatefulInteractiveElement::aria_description(this, description)
                 })
                 .when_some(on_click, |this, on_click| {
                     this.on_change(move |next, _, window, cx| on_click(&next, window, cx))
@@ -284,10 +325,14 @@ impl RenderOnce for Switch {
                         .child(
                             // Switch Toggle
                             SwitchThumb::new(checked)
+                                .disabled(self.disabled)
                                 .rounded(radius)
                                 .size(bar_width)
                                 .left(thumb_x)
-                                .bg(toggle_bg),
+                                .bg(toggle_bg)
+                                .styles(|styles| {
+                                    styles.disabled(|style| style.bg(disabled_toggle_bg))
+                                }),
                         ),
                 )
                 .when_some(self.label, |this, label| {
@@ -302,7 +347,8 @@ impl RenderOnce for Switch {
                             .map(|this| match self.size {
                                 Size::Size(_) => this.input_text_size(Size::Medium),
                                 size => this.input_text_size(size),
-                            }),
+                            })
+                            .when_some(self.label_size, |this, size| this.text_size(size)),
                     )
                 }),
         )
@@ -592,5 +638,39 @@ mod tests {
             .debug_bounds("switch-label")
             .expect("the Switch label must participate in prepaint");
         assert_eq!(bar.origin.y, label.origin.y);
+    }
+    #[gpui::test]
+    fn explicit_track_geometry_survives_font_scale_and_state(cx: &mut TestAppContext) {
+        struct CustomSwitch {
+            checked: bool,
+        }
+        impl Render for CustomSwitch {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                Switch::new("custom")
+                    .track_size(gpui::size(px(36.), px(22.)))
+                    .label_size(px(12.))
+                    .label("Live")
+                    .checked(self.checked)
+                    .disabled(self.checked)
+            }
+        }
+        cx.update(crate::init);
+        let (view, cx) = cx.add_window_view(|_, _| CustomSwitch { checked: false });
+        for rem in [14., 16.] {
+            for checked in [false, true] {
+                view.update(cx, |view, cx| {
+                    view.checked = checked;
+                    cx.notify();
+                });
+                cx.update(|window, cx| {
+                    window.set_rem_size(px(rem));
+                    window.draw(cx).clear(cx);
+                });
+                assert_eq!(
+                    cx.debug_bounds("switch-bar").unwrap().size,
+                    gpui::size(px(36.), px(22.))
+                );
+            }
+        }
     }
 }
