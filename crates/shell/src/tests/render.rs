@@ -7152,6 +7152,10 @@ export default class Keys extends View {
     // the release is posted directly. Without it `on_key_up` would be asserted
     // by a test that never delivered one.
     context.simulate_event(gpui::KeyUpEvent {
+        #[cfg(not(feature = "gpui-fast"))]
+        physical_key: None,
+        #[cfg(not(feature = "gpui-fast"))]
+        key_metadata: None,
         keystroke: gpui::Keystroke::parse("escape").expect("keystroke"),
     });
     context.run_until_parked();

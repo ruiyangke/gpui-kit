@@ -1279,11 +1279,21 @@ mod tests {
         cx.update(|window, cx| window.draw(cx).clear(cx));
         let keystroke = gpui::Keystroke::parse("enter").unwrap();
         cx.simulate_event(gpui::KeyDownEvent {
+            #[cfg(not(feature = "gpui-fast"))]
+            physical_key: None,
+            #[cfg(not(feature = "gpui-fast"))]
+            key_metadata: None,
             keystroke: keystroke.clone(),
             is_held: false,
             prefer_character_input: false,
         });
-        cx.simulate_event(gpui::KeyUpEvent { keystroke });
+        cx.simulate_event(gpui::KeyUpEvent {
+            #[cfg(not(feature = "gpui-fast"))]
+            physical_key: None,
+            #[cfg(not(feature = "gpui-fast"))]
+            key_metadata: None,
+            keystroke,
+        });
         assert_eq!(selected(cx), Some(2));
         assert!(!root_focused(cx));
         assert!(cx.update(|window, cx| window.focused(cx).is_some()));

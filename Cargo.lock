@@ -3803,7 +3803,7 @@ dependencies = [
  "gpui-pre-macros",
  "gpui-pre-platform",
  "gpui-pre-reqwest-client",
- "gpui-pre-sum-tree",
+ "gpui-pre-sum-tree 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
  "html5ever 0.27.0",
  "indoc",
  "instant",
@@ -3880,7 +3880,7 @@ dependencies = [
  "gpui-kit-assets",
  "gpui-pre",
  "gpui-pre-macros",
- "gpui-pre-sum-tree",
+ "gpui-pre-sum-tree 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
  "indoc",
  "instant",
  "itertools 0.13.0",
@@ -4027,14 +4027,14 @@ dependencies = [
  "futures-concurrency",
  "getrandom 0.3.4",
  "gpui-fast-macros",
- "gpui-pre-bench-metrics",
- "gpui-pre-collections",
- "gpui-pre-http-client",
- "gpui-pre-refineable",
- "gpui-pre-scheduler",
- "gpui-pre-shared-string",
- "gpui-pre-sum-tree",
- "gpui-pre-util",
+ "gpui-pre-bench-metrics 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gpui-pre-collections 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gpui-pre-http-client 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gpui-pre-refineable 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gpui-pre-scheduler 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gpui-pre-shared-string 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gpui-pre-sum-tree 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gpui-pre-util 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "hdrhistogram",
  "heapless",
  "image",
@@ -4074,7 +4074,7 @@ dependencies = [
  "waker-fn",
  "web-time",
  "windows 0.62.2",
- "zed-scap",
+ "zed-scap 0.0.8-zed (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -4097,8 +4097,8 @@ dependencies = [
  "foreign-types",
  "futures",
  "gpui-fast",
- "gpui-pre-collections",
- "gpui-pre-util",
+ "gpui-pre-collections 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gpui-pre-util 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "image",
  "libc",
  "log",
@@ -4116,7 +4116,7 @@ dependencies = [
  "pathfinder_geometry",
  "smallvec",
  "thiserror 2.0.20",
- "zed-font-kit",
+ "zed-font-kit 0.14.1-zed (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -4137,9 +4137,9 @@ dependencies = [
  "futures",
  "gpui-fast",
  "gpui-fast-wgpu",
- "gpui-pre-collections",
- "gpui-pre-http-client",
- "gpui-pre-util",
+ "gpui-pre-collections 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gpui-pre-http-client 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gpui-pre-util 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc",
  "log",
  "notify-rust",
@@ -4160,8 +4160,8 @@ dependencies = [
  "wayland-protocols-wlr",
  "x11rb",
  "xkbcommon",
- "zed-scap",
- "zed-xim",
+ "zed-scap 0.0.8-zed (registry+https://github.com/rust-lang/crates.io-index)",
+ "zed-xim 0.4.0-zed (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -4184,9 +4184,9 @@ dependencies = [
  "futures",
  "gpui-fast",
  "gpui-fast-apple",
- "gpui-pre-collections",
- "gpui-pre-scheduler",
- "gpui-pre-util",
+ "gpui-pre-collections 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gpui-pre-scheduler 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gpui-pre-util 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "image",
  "itertools 0.14.0",
  "log",
@@ -4244,8 +4244,8 @@ dependencies = [
  "futures",
  "gpui-fast",
  "gpui-fast-wgpu",
- "gpui-pre-http-client",
- "gpui-pre-scheduler",
+ "gpui-pre-http-client 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gpui-pre-scheduler 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "js-sys",
  "log",
  "parking_lot",
@@ -4257,7 +4257,7 @@ dependencies = [
  "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm_thread",
+ "wasm_thread 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "web-sys",
  "web-time",
 ]
@@ -4273,8 +4273,8 @@ dependencies = [
  "cosmic-text",
  "etagere",
  "gpui-fast",
- "gpui-pre-collections",
- "gpui-pre-util",
+ "gpui-pre-collections 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gpui-pre-util 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "image",
  "itertools 0.14.0",
  "log",
@@ -4287,7 +4287,7 @@ dependencies = [
  "unicode-segmentation",
  "web-sys",
  "wgpu",
- "zed-font-kit",
+ "zed-font-kit 0.14.1-zed (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -4303,9 +4303,9 @@ dependencies = [
  "etagere",
  "futures",
  "gpui-fast",
- "gpui-pre-collections",
- "gpui-pre-scheduler",
- "gpui-pre-util",
+ "gpui-pre-collections 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gpui-pre-scheduler 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gpui-pre-util 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "image",
  "itertools 0.14.0",
  "log",
@@ -4381,8 +4381,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre"
 version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34f61c1cfd36fc9c436af09308c963822ae27a45a84feb21a77ba5c9e051f1c0"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -4399,15 +4398,15 @@ dependencies = [
  "futures",
  "futures-concurrency",
  "getrandom 0.3.4",
- "gpui-pre-bench-metrics",
- "gpui-pre-collections",
- "gpui-pre-http-client",
+ "gpui-pre-bench-metrics 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
+ "gpui-pre-collections 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
+ "gpui-pre-http-client 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
  "gpui-pre-macros",
- "gpui-pre-refineable",
- "gpui-pre-scheduler",
- "gpui-pre-shared-string",
- "gpui-pre-sum-tree",
- "gpui-pre-util",
+ "gpui-pre-refineable 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
+ "gpui-pre-scheduler 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
+ "gpui-pre-shared-string 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
+ "gpui-pre-sum-tree 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
+ "gpui-pre-util 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
  "hdrhistogram",
  "heapless",
  "image",
@@ -4447,14 +4446,13 @@ dependencies = [
  "waker-fn",
  "web-time",
  "windows 0.62.2",
- "zed-scap",
+ "zed-scap 0.0.8-zed (git+https://github.com/zed-industries/scap?rev=4afea48c3b002197176fb19cd0f9b180dd36eaac)",
 ]
 
 [[package]]
 name = "gpui-pre-apple"
 version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b52f58893fe1a0836464428dfad2b5eaf42c9c303a9638f4c2aced5a69072a15"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
 dependencies = [
  "anyhow",
  "async-task",
@@ -4470,8 +4468,8 @@ dependencies = [
  "foreign-types",
  "futures",
  "gpui-pre",
- "gpui-pre-collections",
- "gpui-pre-util",
+ "gpui-pre-collections 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
+ "gpui-pre-util 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
  "image",
  "libc",
  "log",
@@ -4489,7 +4487,7 @@ dependencies = [
  "pathfinder_geometry",
  "smallvec",
  "thiserror 2.0.20",
- "zed-font-kit",
+ "zed-font-kit 0.14.1-zed (git+https://github.com/zed-industries/font-kit?rev=94b0f28166665e8fd2f53ff6d268a14955c82269)",
 ]
 
 [[package]]
@@ -4505,12 +4503,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui-pre-bench-metrics"
+version = "0.3.9"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
+dependencies = [
+ "anyhow",
+ "criterion",
+ "libc",
+ "perf-event2",
+]
+
+[[package]]
 name = "gpui-pre-collections"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "920c2f5b2f1a7813114d89f4841f26f6060d9c35d7c8a852a4205d1a767a7ce0"
 dependencies = [
- "gpui-pre-util",
+ "gpui-pre-util 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "indexmap",
+ "rustc-hash 2.1.3",
+]
+
+[[package]]
+name = "gpui-pre-collections"
+version = "0.3.9"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
+dependencies = [
+ "gpui-pre-util 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
  "indexmap",
  "rustc-hash 2.1.3",
 ]
@@ -4520,6 +4539,16 @@ name = "gpui-pre-derive-refineable"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "947395f26228296c0c79fb889d3687b205e552c25bbcdece216fb2394ea9bcd1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "gpui-pre-derive-refineable"
+version = "0.3.9"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4546,10 +4575,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui-pre-http-client"
+version = "0.3.9"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "futures",
+ "http",
+ "http-body",
+ "log",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "url",
+]
+
+[[package]]
 name = "gpui-pre-http-client-tls"
 version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7616a90ec92c9832bbc80ddab34e10fdf8d23520d5cbb0b432b73e4e9f6c812"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
 dependencies = [
  "log",
  "rustls",
@@ -4560,8 +4606,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-linux"
 version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e28213c3fde6f13e91ba0b74b90cbaadec9373e36a031eda98561d31059870f3"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -4574,9 +4619,9 @@ dependencies = [
  "filedescriptor",
  "futures",
  "gpui-pre",
- "gpui-pre-collections",
- "gpui-pre-http-client",
- "gpui-pre-util",
+ "gpui-pre-collections 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
+ "gpui-pre-http-client 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
+ "gpui-pre-util 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
  "gpui-pre-wgpu",
  "libc",
  "log",
@@ -4598,15 +4643,14 @@ dependencies = [
  "wayland-protocols-wlr",
  "x11rb",
  "xkbcommon",
- "zed-scap",
- "zed-xim",
+ "zed-scap 0.0.8-zed (git+https://github.com/zed-industries/scap?rev=4afea48c3b002197176fb19cd0f9b180dd36eaac)",
+ "zed-xim 0.4.0-zed (git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8)",
 ]
 
 [[package]]
 name = "gpui-pre-macos"
 version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7c988b7e49775cc8542dbe48d5a10e073d8e898a023ef3ff3d24f33363e9863"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -4622,9 +4666,9 @@ dependencies = [
  "futures",
  "gpui-pre",
  "gpui-pre-apple",
- "gpui-pre-collections",
- "gpui-pre-scheduler",
- "gpui-pre-util",
+ "gpui-pre-collections 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
+ "gpui-pre-scheduler 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
+ "gpui-pre-util 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
  "image",
  "itertools 0.14.0",
  "log",
@@ -4645,8 +4689,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-macros"
 version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bb80dac5e1f6b8cde1d2740389e77dfc0071bfcc81fba5526d5dc90f68171cc"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
 dependencies = [
  "heck 0.5.0",
  "proc-macro-crate 3.5.0",
@@ -4658,8 +4701,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-platform"
 version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbdbdac421178313fed8929fe95b42634a266a735079fcf03ff231bc2ccb2c5e"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -4677,7 +4719,15 @@ version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "237703b3b219d11adb50dd33bb0fcca3d34fc001623b3143e72cb051d0fb3777"
 dependencies = [
- "gpui-pre-derive-refineable",
+ "gpui-pre-derive-refineable 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "gpui-pre-refineable"
+version = "0.3.9"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
+dependencies = [
+ "gpui-pre-derive-refineable 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
 ]
 
 [[package]]
@@ -4734,16 +4784,15 @@ dependencies = [
 [[package]]
 name = "gpui-pre-reqwest-client"
 version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92c2e70dc8550d60324b1eb3f3d08b4ccf20a8b577a9a42732dd3bafb2363bc0"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
 dependencies = [
  "anyhow",
  "bytes",
  "futures",
- "gpui-pre-http-client",
+ "gpui-pre-http-client 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
  "gpui-pre-http-client-tls",
  "gpui-pre-reqwest",
- "gpui-pre-util",
+ "gpui-pre-util 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
  "log",
  "regex",
  "tokio",
@@ -4762,7 +4811,23 @@ dependencies = [
  "futures",
  "parking_lot",
  "rand 0.9.5",
- "wasm_thread",
+ "wasm_thread 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "web-time",
+]
+
+[[package]]
+name = "gpui-pre-scheduler"
+version = "0.3.9"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
+dependencies = [
+ "async-task",
+ "backtrace",
+ "chrono",
+ "flume 0.12.0",
+ "futures",
+ "parking_lot",
+ "rand 0.9.5",
+ "wasm_thread 0.3.3 (git+https://github.com/zed-industries/wasm_thread?rev=0cf96c7708dfb97ccf3da50347e25edcf75d6937)",
  "web-time",
 ]
 
@@ -4778,12 +4843,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui-pre-shared-string"
+version = "0.3.9"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
+dependencies = [
+ "schemars",
+ "serde",
+ "smol_str",
+]
+
+[[package]]
 name = "gpui-pre-sum-tree"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aadb3bd3da22617e2158b1842f5a9c29c1626c926ad0686163ced1a009963ff3"
 dependencies = [
- "gpui-pre-ztracing",
+ "gpui-pre-ztracing 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "heapless",
+ "rayon",
+ "tracing",
+]
+
+[[package]]
+name = "gpui-pre-sum-tree"
+version = "0.3.9"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
+dependencies = [
+ "gpui-pre-ztracing 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
  "heapless",
  "rayon",
  "tracing",
@@ -4801,18 +4887,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui-pre-util"
+version = "0.3.9"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
+dependencies = [
+ "anyhow",
+ "log",
+ "which",
+]
+
+[[package]]
 name = "gpui-pre-web"
 version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aedd55b99dc77e28df8202b0ea868aa5c90fda4aefff539ea21087d7c2ff4bfb"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
 dependencies = [
  "anyhow",
  "async-channel",
  "console_error_panic_hook",
  "futures",
  "gpui-pre",
- "gpui-pre-http-client",
- "gpui-pre-scheduler",
+ "gpui-pre-http-client 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
+ "gpui-pre-scheduler 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
  "gpui-pre-wgpu",
  "js-sys",
  "log",
@@ -4825,7 +4920,7 @@ dependencies = [
  "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm_thread",
+ "wasm_thread 0.3.3 (git+https://github.com/zed-industries/wasm_thread?rev=0cf96c7708dfb97ccf3da50347e25edcf75d6937)",
  "web-sys",
  "web-time",
 ]
@@ -4833,16 +4928,15 @@ dependencies = [
 [[package]]
 name = "gpui-pre-wgpu"
 version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b1cdb26c1503bf9662ee8fbc5ab0b44b2deeee4b5c12dc67491ba6fb5fc544b"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
 dependencies = [
  "anyhow",
  "bytemuck",
  "cosmic-text",
  "etagere",
  "gpui-pre",
- "gpui-pre-collections",
- "gpui-pre-util",
+ "gpui-pre-collections 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
+ "gpui-pre-util 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
  "image",
  "itertools 0.14.0",
  "log",
@@ -4855,14 +4949,13 @@ dependencies = [
  "unicode-segmentation",
  "web-sys",
  "wgpu",
- "zed-font-kit",
+ "zed-font-kit 0.14.1-zed (git+https://github.com/zed-industries/font-kit?rev=94b0f28166665e8fd2f53ff6d268a14955c82269)",
 ]
 
 [[package]]
 name = "gpui-pre-windows"
 version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "513d4f0fc7d596d3bdef2a73a524ffb83dabc95bf484f2855a698e7f431290a9"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -4871,9 +4964,9 @@ dependencies = [
  "etagere",
  "futures",
  "gpui-pre",
- "gpui-pre-collections",
- "gpui-pre-scheduler",
- "gpui-pre-util",
+ "gpui-pre-collections 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
+ "gpui-pre-scheduler 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
+ "gpui-pre-util 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
  "image",
  "itertools 0.14.0",
  "log",
@@ -4894,7 +4987,16 @@ version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f17bfd6bd1f77ba5c58181fa6f82fc7a63015a1c58bef94a76e5acb9f8e42572"
 dependencies = [
- "gpui-pre-ztracing-macro",
+ "gpui-pre-ztracing-macro 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tracing",
+]
+
+[[package]]
+name = "gpui-pre-ztracing"
+version = "0.3.9"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
+dependencies = [
+ "gpui-pre-ztracing-macro 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
  "tracing",
 ]
 
@@ -4903,6 +5005,11 @@ name = "gpui-pre-ztracing-macro"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b0d73e1bc02eef886a5947f41b8512708792e9e5d3053d181843311a487f96f"
+
+[[package]]
+name = "gpui-pre-ztracing-macro"
+version = "0.3.9"
+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
 
 [[package]]
 name = "gpui-shell"
@@ -11908,6 +12015,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm_thread"
+version = "0.3.3"
+source = "git+https://github.com/zed-industries/wasm_thread?rev=0cf96c7708dfb97ccf3da50347e25edcf75d6937#0cf96c7708dfb97ccf3da50347e25edcf75d6937"
+dependencies = [
+ "futures",
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "wayland-backend"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13177,6 +13295,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "xim-ctext"
+version = "0.3.0"
+source = "git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
+dependencies = [
+ "encoding_rs",
+]
+
+[[package]]
+name = "xim-parser"
+version = "0.2.1"
+source = "git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
+dependencies = [
+ "bitflags 2.13.1",
+]
+
+[[package]]
 name = "xim-parser"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13404,10 +13538,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "zed-font-kit"
+version = "0.14.1-zed"
+source = "git+https://github.com/zed-industries/font-kit?rev=94b0f28166665e8fd2f53ff6d268a14955c82269#94b0f28166665e8fd2f53ff6d268a14955c82269"
+dependencies = [
+ "bitflags 2.13.1",
+ "byteorder",
+ "core-foundation 0.10.1",
+ "core-graphics 0.24.0",
+ "core-text",
+ "dirs 6.0.0",
+ "dwrote",
+ "float-ord",
+ "freetype-sys",
+ "lazy_static",
+ "libc",
+ "log",
+ "pathfinder_geometry",
+ "pathfinder_simd",
+ "walkdir",
+ "winapi",
+ "yeslogic-fontconfig-sys",
+]
+
+[[package]]
 name = "zed-scap"
 version = "0.0.8-zed"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6b338d705ae33a43ca00287c11129303a7a0aa57b101b72a1c08c863f698ac8"
+dependencies = [
+ "anyhow",
+ "cocoa 0.25.0",
+ "core-graphics-helmer-fork",
+ "log",
+ "objc",
+ "rand 0.8.8",
+ "screencapturekit",
+ "screencapturekit-sys",
+ "sysinfo 0.31.4",
+ "tao-core-video-sys",
+ "windows 0.61.3",
+ "windows-capture",
+ "x11",
+ "xcb",
+]
+
+[[package]]
+name = "zed-scap"
+version = "0.0.8-zed"
+source = "git+https://github.com/zed-industries/scap?rev=4afea48c3b002197176fb19cd0f9b180dd36eaac#4afea48c3b002197176fb19cd0f9b180dd36eaac"
 dependencies = [
  "anyhow",
  "cocoa 0.25.0",
@@ -13435,8 +13614,21 @@ dependencies = [
  "hashbrown 0.14.5",
  "log",
  "x11rb",
- "xim-ctext",
- "xim-parser",
+ "xim-ctext 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "xim-parser 0.2.2",
+]
+
+[[package]]
+name = "zed-xim"
+version = "0.4.0-zed"
+source = "git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
+dependencies = [
+ "ahash",
+ "hashbrown 0.14.5",
+ "log",
+ "x11rb",
+ "xim-ctext 0.3.0 (git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8)",
+ "xim-parser 0.2.1",
 ]
 
 [[package]]

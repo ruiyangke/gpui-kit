@@ -356,11 +356,21 @@ mod tests {
         for key in ["enter", "space"] {
             let keystroke = Keystroke::parse(key).unwrap();
             cx.simulate_event(KeyDownEvent {
+                #[cfg(not(feature = "gpui-fast"))]
+                physical_key: None,
+                #[cfg(not(feature = "gpui-fast"))]
+                key_metadata: None,
                 keystroke: keystroke.clone(),
                 is_held: false,
                 prefer_character_input: false,
             });
-            cx.simulate_event(KeyUpEvent { keystroke });
+            cx.simulate_event(KeyUpEvent {
+                #[cfg(not(feature = "gpui-fast"))]
+                physical_key: None,
+                #[cfg(not(feature = "gpui-fast"))]
+                key_metadata: None,
+                keystroke,
+            });
         }
 
         assert_eq!(button_clicks.get(), 2);

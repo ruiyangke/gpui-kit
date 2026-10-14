@@ -535,6 +535,10 @@ fn press_key(window: &mut Window, key: Keystroke, cx: &mut App) {
     let key = if matches!(key.key.as_str(), "enter" | "tab") {
         window.dispatch_event(
             KeyDownEvent {
+                #[cfg(not(feature = "gpui-fast"))]
+                physical_key: None,
+                #[cfg(not(feature = "gpui-fast"))]
+                key_metadata: None,
                 keystroke: key.clone(),
                 is_held: false,
                 prefer_character_input: false,
@@ -550,7 +554,17 @@ fn press_key(window: &mut Window, key: Keystroke, cx: &mut App) {
     };
     // Buttons activate on key-up, so every press must complete the pair even
     // if its key-down handler consumed the event or changed focus.
-    window.dispatch_event(KeyUpEvent { keystroke: key }.to_platform_input(), cx);
+    window.dispatch_event(
+        KeyUpEvent {
+            #[cfg(not(feature = "gpui-fast"))]
+            physical_key: None,
+            #[cfg(not(feature = "gpui-fast"))]
+            key_metadata: None,
+            keystroke: key,
+        }
+        .to_platform_input(),
+        cx,
+    );
 }
 
 fn input_text(window: &mut Window, text: &str, scope: Option<&[ElementId]>, cx: &mut App) {

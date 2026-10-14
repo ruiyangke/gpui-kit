@@ -753,11 +753,21 @@ mod tests {
         });
         let keystroke = Keystroke::parse("space").unwrap();
         cx.simulate_event(KeyDownEvent {
+            #[cfg(not(feature = "gpui-fast"))]
+            physical_key: None,
+            #[cfg(not(feature = "gpui-fast"))]
+            key_metadata: None,
             keystroke: keystroke.clone(),
             is_held: false,
             prefer_character_input: false,
         });
-        cx.simulate_event(KeyUpEvent { keystroke });
+        cx.simulate_event(KeyUpEvent {
+            #[cfg(not(feature = "gpui-fast"))]
+            physical_key: None,
+            #[cfg(not(feature = "gpui-fast"))]
+            key_metadata: None,
+            keystroke,
+        });
         cx.run_until_parked();
         assert_eq!(attempts.get(), 2);
         assert!(!handle.is_open(), "Space uses the same cancel decision");
