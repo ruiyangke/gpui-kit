@@ -1,0 +1,714 @@
+diff --git a/crates/gpui/src/app/test_context.rs b/crates/gpui/src/app/test_context.rs
+index 1632843..39bf6c3 100644
+--- a/crates/gpui/src/app/test_context.rs
++++ b/crates/gpui/src/app/test_context.rs
+@@ -990,6 +990,11 @@ impl VisualTestContext {
+         })
+     }
+ 
++    /// Set the current Num Lock state reported by the test platform.
++    pub fn simulate_numlock_change(&mut self, on: bool) {
++        self.test_window(self.window).simulate_numlock_change(on);
++    }
++
+     /// Simulate a capslock changed event
+     pub fn simulate_capslock_change(&mut self, on: bool) {
+         self.simulate_event(ModifiersChangedEvent {
+diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
+index fc292f2..839eada 100644
+--- a/crates/gpui/src/elements/div.rs
++++ b/crates/gpui/src/elements/div.rs
+@@ -5360,6 +5360,8 @@ mod tests {
+         cx.update_window(window, |_, window, cx| {
+             window.dispatch_event(
+                 KeyDownEvent {
++                    physical_key: None,
++                    key_metadata: None,
+                     keystroke,
+                     is_held: false,
+                     prefer_character_input: false,
+@@ -5374,7 +5376,15 @@ mod tests {
+     fn key_up(cx: &mut TestAppContext, window: AnyWindowHandle, key: &str) {
+         let keystroke = Keystroke::parse(key).unwrap();
+         cx.update_window(window, |_, window, cx| {
+-            window.dispatch_event(KeyUpEvent { keystroke }.to_platform_input(), cx);
++            window.dispatch_event(
++                KeyUpEvent {
++                    physical_key: None,
++                    key_metadata: None,
++                    keystroke,
++                }
++                .to_platform_input(),
++                cx,
++            );
+         })
+         .unwrap();
+     }
+diff --git a/crates/gpui/src/interactive.rs b/crates/gpui/src/interactive.rs
+index 913cf1b..7796b64 100644
+--- a/crates/gpui/src/interactive.rs
++++ b/crates/gpui/src/interactive.rs
+@@ -20,12 +20,44 @@ pub trait MouseEvent: InputEvent {}
+ /// A gesture event from the platform.
+ pub trait GestureEvent: InputEvent {}
+ 
++/// An opaque physical key identity, independent of layout and modifiers.
++///
++/// Compare identities only within the current platform/backend. These values
++/// are not portable key bindings and must not be used to infer typed text.
++#[derive(Clone, Debug, Eq, PartialEq, Hash)]
++pub enum PhysicalKey {
++    /// The native backend's key/scancode, including extended-key information.
++    Native(u32),
++    /// A browser KeyboardEvent.code value identifying a physical key position.
++    Web(crate::SharedString),
++}
++
++/// Event-time native key information, independent of shortcut normalization.
++/// Synthetic events and backends without native metadata leave this absent.
++#[derive(Clone, Debug, Eq, PartialEq)]
++pub struct KeyEventMetadata {
++    /// Text produced by this physical key in the current layout with no modifiers.
++    pub unmodified_text: Option<crate::SharedString>,
++    /// Modifier state before layout-dependent shortcut normalization.
++    pub modifiers: Modifiers,
++    /// Whether Caps Lock is enabled at the time of the event.
++    pub caps_lock: bool,
++    /// Whether Num Lock is enabled at the time of the event.
++    pub num_lock: bool,
++}
++
+ /// The key down event equivalent for the platform.
+ #[derive(Clone, Debug, Eq, PartialEq)]
+ pub struct KeyDownEvent {
+     /// The keystroke that was generated.
+     pub keystroke: Keystroke,
+ 
++    /// Physical identity when available; absent for synthetic text-only events.
++    pub physical_key: Option<PhysicalKey>,
++
++    /// Native layout and modifier state before shortcut normalization.
++    pub key_metadata: Option<KeyEventMetadata>,
++
+     /// Whether the key is currently held down.
+     pub is_held: bool,
+ 
+@@ -47,6 +79,12 @@ impl KeyEvent for KeyDownEvent {}
+ pub struct KeyUpEvent {
+     /// The keystroke that was released.
+     pub keystroke: Keystroke,
++
++    /// Physical identity when available; absent for synthetic text-only events.
++    pub physical_key: Option<PhysicalKey>,
++
++    /// Native layout and modifier state before shortcut normalization.
++    pub key_metadata: Option<KeyEventMetadata>,
+ }
+ 
+ impl Sealed for KeyUpEvent {}
+diff --git a/crates/gpui/src/key_dispatch.rs b/crates/gpui/src/key_dispatch.rs
+index 2f755b1..db3f323 100644
+--- a/crates/gpui/src/key_dispatch.rs
++++ b/crates/gpui/src/key_dispatch.rs
+@@ -947,6 +947,8 @@ mod tests {
+         cx.update(|window, cx| {
+             window.dispatch_event(
+                 PlatformInput::KeyDown(KeyDownEvent {
++                    physical_key: None,
++                    key_metadata: None,
+                     keystroke: Keystroke {
+                         key_char: Some("ą".into()),
+                         ..Keystroke::parse("ctrl-alt-a").expect("valid keystroke")
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index c08d964..8fd8687 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -1222,6 +1222,10 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+     fn mouse_position(&self) -> Point<Pixels>;
+     fn modifiers(&self) -> Modifiers;
+     fn capslock(&self) -> Capslock;
++    /// Current Num Lock state, or None when this backend cannot report it.
++    fn numlock(&self) -> Option<bool> {
++        None
++    }
+     fn set_input_handler(&mut self, input_handler: PlatformInputHandler);
+     fn take_input_handler(&mut self) -> Option<PlatformInputHandler>;
+     /// Apply the focused text region's [`TextInputConfiguration`] to the
+diff --git a/crates/gpui/src/platform/test/window.rs b/crates/gpui/src/platform/test/window.rs
+index 5692b1e..3907129 100644
+--- a/crates/gpui/src/platform/test/window.rs
++++ b/crates/gpui/src/platform/test/window.rs
+@@ -54,6 +54,7 @@ pub(crate) struct TestWindowState {
+     text_input_configurations: Vec<TextInputConfiguration>,
+     text_input_state_changes: Vec<TextInputStateChange>,
+     is_fullscreen: bool,
++    numlock: Option<bool>,
+     scale_factor: f32,
+     appearance: WindowAppearance,
+     external_drag_files: Vec<(PathBuf, bool)>,
+@@ -101,6 +102,7 @@ impl TestWindow {
+             sprite_atlas,
+             renderer,
+             title: Default::default(),
++            numlock: None,
+             edited: false,
+             document_path: None,
+             should_close_handler: None,
+@@ -158,6 +160,11 @@ impl TestWindow {
+         self.0.lock().frame_scheduled
+     }
+ 
++    /// Set the current Num Lock state reported by this test backend.
++    pub fn simulate_numlock_change(&self, on: bool) {
++        self.0.lock().numlock = Some(on);
++    }
++
+     pub fn simulate_visibility_change(&self, visibility: WindowVisibility) {
+         let callback = {
+             let mut state = self.0.lock();
+@@ -378,6 +385,10 @@ impl PlatformWindow for TestWindow {
+         crate::Capslock::default()
+     }
+ 
++    fn numlock(&self) -> Option<bool> {
++        self.0.lock().numlock
++    }
++
+     fn set_input_handler(&mut self, input_handler: PlatformInputHandler) {
+         self.0.lock().input_handler = Some(input_handler);
+     }
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 1214b03..bf794dc 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -3417,6 +3417,12 @@ impl Window {
+         self.capslock
+     }
+ 
++    /// Current Num Lock state, or None when the platform cannot report it.
++    /// Query the backend so focus-loss releases do not reuse a previous key event.
++    pub fn numlock(&self) -> Option<bool> {
++        self.platform_window.numlock()
++    }
++
+     /// Produces a new frame and assigns it to `rendered_frame`. To actually show
+     /// the contents of the new [`Scene`], use [`Self::present`].
+     #[profiling::function]
+@@ -5552,6 +5558,8 @@ impl Window {
+         let keystroke = keystroke.with_simulated_ime();
+         let result = self.dispatch_event(
+             PlatformInput::KeyDown(KeyDownEvent {
++                physical_key: None,
++                key_metadata: None,
+                 keystroke: keystroke.clone(),
+                 is_held: false,
+                 prefer_character_input: false,
+@@ -6427,6 +6435,8 @@ impl Window {
+ 
+         'replay: for replay in replays {
+             let event = KeyDownEvent {
++                physical_key: None,
++                key_metadata: None,
+                 keystroke: replay.keystroke.clone(),
+                 is_held: false,
+                 prefer_character_input: true,
+@@ -8829,6 +8839,8 @@ mod tests {
+             window.draw(cx).clear(cx);
+             window.dispatch_event(
+                 PlatformInput::KeyDown(KeyDownEvent {
++                    physical_key: None,
++                    key_metadata: None,
+                     keystroke: Keystroke::parse("down").expect("valid keystroke"),
+                     is_held: false,
+                     prefer_character_input: false,
+diff --git a/crates/gpui/tests/physical_key.rs b/crates/gpui/tests/physical_key.rs
+new file mode 100644
+index 0000000..b4da820
+--- /dev/null
++++ b/crates/gpui/tests/physical_key.rs
+@@ -0,0 +1,112 @@
++use gpui::prelude::*;
++use std::{cell::RefCell, rc::Rc};
++
++struct KeyObserver {
++    focus: gpui::FocusHandle,
++    seen: Rc<
++        RefCell<
++            Vec<(
++                Option<gpui::PhysicalKey>,
++                Option<gpui::KeyEventMetadata>,
++                String,
++                bool,
++            )>,
++        >,
++    >,
++}
++
++impl Render for KeyObserver {
++    fn render(&mut self, _: &mut gpui::Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
++        let down = self.seen.clone();
++        let up = self.seen.clone();
++        gpui::div()
++            .track_focus(&self.focus)
++            .on_key_down(move |event, _, _| {
++                down.borrow_mut().push((
++                    event.physical_key.clone(),
++                    event.key_metadata.clone(),
++                    event.keystroke.key.clone(),
++                    event.is_held,
++                ));
++            })
++            .on_key_up(move |event, _, _| {
++                up.borrow_mut().push((
++                    event.physical_key.clone(),
++                    event.key_metadata.clone(),
++                    event.keystroke.key.clone(),
++                    false,
++                ));
++            })
++    }
++}
++
++#[gpui::test]
++fn physical_key_identity_survives_dispatch_modifier_changes_and_repeat(
++    cx: &mut gpui::TestAppContext,
++) {
++    let seen = Rc::new(RefCell::new(Vec::new()));
++    let (view, cx) = cx.add_window_view(|_, cx| KeyObserver {
++        focus: cx.focus_handle(),
++        seen: seen.clone(),
++    });
++    cx.update(|window, cx| {
++        let focus = view.read(cx).focus.clone();
++        focus.focus(window, cx);
++        window.activate_window();
++        window.draw(cx).clear(cx);
++    });
++    let physical = Some(gpui::PhysicalKey::Native(18));
++    let metadata = Some(gpui::KeyEventMetadata {
++        unmodified_text: Some("1".into()),
++        modifiers: gpui::Modifiers {
++            shift: true,
++            ..Default::default()
++        },
++        caps_lock: true,
++        num_lock: false,
++    });
++    for is_held in [false, true] {
++        cx.simulate_event(gpui::KeyDownEvent {
++            physical_key: physical.clone(),
++            key_metadata: metadata.clone(),
++            keystroke: gpui::Keystroke::parse("!").unwrap(),
++            is_held,
++            prefer_character_input: false,
++        });
++    }
++    cx.simulate_event(gpui::KeyUpEvent {
++        physical_key: physical.clone(),
++        key_metadata: None,
++        keystroke: gpui::Keystroke::parse("1").unwrap(),
++    });
++    // Synthetic text has no claimed hardware origin.
++    cx.simulate_event(gpui::KeyDownEvent {
++        physical_key: None,
++        key_metadata: None,
++        keystroke: gpui::Keystroke::parse("x").unwrap(),
++        is_held: false,
++        prefer_character_input: false,
++    });
++    assert_eq!(
++        *seen.borrow(),
++        vec![
++            (physical.clone(), metadata.clone(), "!".into(), false),
++            (physical.clone(), metadata, "!".into(), true),
++            (physical, None, "1".into(), false),
++            (None, None, "x".into(), false),
++        ]
++    );
++}
++
++#[gpui::test]
++fn numlock_query_reports_unknown_then_current_backend_state(cx: &mut gpui::TestAppContext) {
++    let (_, cx) = cx.add_window_view(|_, cx| KeyObserver {
++        focus: cx.focus_handle(),
++        seen: Rc::new(RefCell::new(Vec::new())),
++    });
++    assert_eq!(cx.update(|window, _| window.numlock()), None);
++    cx.simulate_numlock_change(true);
++    assert_eq!(cx.update(|window, _| window.numlock()), Some(true));
++    cx.simulate_numlock_change(false);
++    assert_eq!(cx.update(|window, _| window.numlock()), Some(false));
++}
+diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
+index 84f4d0f..8ac912b 100644
+--- a/crates/gpui_linux/src/linux/wayland/client.rs
++++ b/crates/gpui_linux/src/linux/wayland/client.rs
+@@ -2207,6 +2207,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+                             state.compose_state = Some(compose);
+                         }
+                         let input = PlatformInput::KeyDown(KeyDownEvent {
++                            physical_key: Some(gpui::PhysicalKey::Native(keycode.raw())),
++                            key_metadata: None,
+                             keystroke: keystroke.clone(),
+                             is_held: false,
+                             prefer_character_input: false,
+@@ -2222,6 +2224,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+                             .loop_handle
+                             .insert_source(Timer::from_duration(state.repeat.delay), {
+                                 let input = PlatformInput::KeyDown(KeyDownEvent {
++                                    physical_key: Some(gpui::PhysicalKey::Native(keycode.raw())),
++                                    key_metadata: None,
+                                     keystroke,
+                                     is_held: true,
+                                     prefer_character_input: false,
+@@ -2257,6 +2261,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+                     }
+                     wl_keyboard::KeyState::Released if !keysym.is_modifier_key() => {
+                         let input = PlatformInput::KeyUp(KeyUpEvent {
++                            physical_key: Some(gpui::PhysicalKey::Native(keycode.raw())),
++                            key_metadata: None,
+                             keystroke: keystroke_from_xkb(keymap_state, state.modifiers, keycode),
+                         });
+ 
+@@ -2307,6 +2313,8 @@ impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for WaylandClientStatePtr {
+                     // We should only send ASCII characters to Zed, otherwise a user could remap a letter like `か` or `相`.
+                     if commit_text.len() == 1 {
+                         window.handle_input(PlatformInput::KeyDown(KeyDownEvent {
++                            physical_key: None,
++                            key_metadata: None,
+                             keystroke: Keystroke {
+                                 modifiers: Modifiers::default(),
+                                 key: commit_text.clone(),
+diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
+index 601eb93..640fc42 100644
+--- a/crates/gpui_linux/src/linux/x11/client.rs
++++ b/crates/gpui_linux/src/linux/x11/client.rs
+@@ -1201,6 +1201,8 @@ impl X11Client {
+                 };
+                 drop(state);
+                 window.handle_input(PlatformInput::KeyDown(gpui::KeyDownEvent {
++                    physical_key: Some(gpui::PhysicalKey::Native(u32::from(event.detail))),
++                    key_metadata: None,
+                     keystroke,
+                     is_held: false,
+                     prefer_character_input: false,
+@@ -1226,7 +1228,11 @@ impl X11Client {
+                     keystroke
+                 };
+                 drop(state);
+-                window.handle_input(PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }));
++                window.handle_input(PlatformInput::KeyUp(gpui::KeyUpEvent {
++                    physical_key: Some(gpui::PhysicalKey::Native(u32::from(event.detail))),
++                    key_metadata: None,
++                    keystroke,
++                }));
+             }
+             Event::XinputButtonPress(event) => {
+                 let window = self.get_window(event.event)?;
+diff --git a/crates/gpui_macos/src/events.rs b/crates/gpui_macos/src/events.rs
+index 71bcb10..f3cac43 100644
+--- a/crates/gpui_macos/src/events.rs
++++ b/crates/gpui_macos/src/events.rs
+@@ -101,6 +101,25 @@ unsafe fn read_modifiers(native_event: id) -> Modifiers {
+     }
+ }
+ 
++unsafe fn read_key_metadata(native_event: id) -> gpui::KeyEventMetadata {
++    unsafe {
++        let text: id = msg_send![native_event, charactersByApplyingModifiers: 0u64];
++        gpui::KeyEventMetadata {
++            unmodified_text: if text.is_null() {
++                None
++            } else {
++                Some(text.to_str().to_owned().into())
++            },
++            modifiers: read_modifiers(native_event),
++            caps_lock: native_event
++                .modifierFlags()
++                .contains(NSEventModifierFlags::NSAlphaShiftKeyMask),
++            // NSNumericPadKeyMask identifies a key location, not Num Lock.
++            num_lock: false,
++        }
++    }
++}
++
+ pub(crate) unsafe fn platform_input_from_native(
+     native_event: id,
+     window_height: Option<Pixels>,
+@@ -129,11 +148,15 @@ pub(crate) unsafe fn platform_input_from_native(
+                 }))
+             }
+             NSEventType::NSKeyDown => Some(PlatformInput::KeyDown(KeyDownEvent {
++                physical_key: Some(gpui::PhysicalKey::Native(u32::from(native_event.keyCode()))),
++                key_metadata: Some(read_key_metadata(native_event)),
+                 keystroke: parse_keystroke(native_event),
+                 is_held: native_event.isARepeat() == YES,
+                 prefer_character_input: false,
+             })),
+             NSEventType::NSKeyUp => Some(PlatformInput::KeyUp(KeyUpEvent {
++                physical_key: Some(gpui::PhysicalKey::Native(u32::from(native_event.keyCode()))),
++                key_metadata: Some(read_key_metadata(native_event)),
+                 keystroke: parse_keystroke(native_event),
+             })),
+             NSEventType::NSLeftMouseDown
+diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
+index b042825..1854ed8 100644
+--- a/crates/gpui_macos/src/window.rs
++++ b/crates/gpui_macos/src/window.rs
+@@ -26,12 +26,12 @@ use cocoa::{
+ use dispatch2::DispatchQueue;
+ use gpui::{
+     AnyWindowHandle, BackgroundExecutor, Bounds, Capslock, CursorStyle, ExternalDragPayload,
+-    ExternalPaths, FileDropEvent, ForegroundExecutor, FrameRequestSource, KeyDownEvent, Keystroke,
+-    Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+-    Pixels, PlatformAtlas, PlatformDisplay, PlatformFrameSignal, PlatformInput,
+-    PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
+-    SharedString, Size, SystemWindowTab, WindowAppearance, WindowBackgroundAppearance,
+-    WindowBounds, WindowControlArea, WindowKind, WindowParams, WindowVisibility, point, px, size,
++    ExternalPaths, FileDropEvent, ForegroundExecutor, FrameRequestSource, KeyDownEvent, Modifiers,
++    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
++    PlatformAtlas, PlatformDisplay, PlatformFrameSignal, PlatformInput, PlatformInputHandler,
++    PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions, SharedString, Size,
++    SystemWindowTab, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
++    WindowKind, WindowParams, WindowVisibility, point, px, size,
+ };
+ #[cfg(any(test, feature = "test-support"))]
+ use image::RgbaImage;
+@@ -689,7 +689,7 @@ struct MacWindowState {
+     pre_fullscreen_traffic_light_frames: Option<TrafficLightFrames>,
+     transparent_titlebar: bool,
+     previous_modifiers_changed_event: Option<PlatformInput>,
+-    keystroke_for_do_command: Option<Keystroke>,
++    key_down_for_do_command: Option<KeyDownEvent>,
+     do_command_handled: Option<bool>,
+     external_files_dragged: bool,
+     // Whether the next left-mouse click is also the focusing click.
+@@ -1131,7 +1131,7 @@ impl MacWindow {
+                     .as_ref()
+                     .is_none_or(|titlebar| titlebar.appears_transparent),
+                 previous_modifiers_changed_event: None,
+-                keystroke_for_do_command: None,
++                key_down_for_do_command: None,
+                 do_command_handled: None,
+                 external_files_dragged: false,
+                 first_mouse: false,
+@@ -2725,7 +2725,7 @@ extern "C" fn handle_key_event(this: &Object, native_event: id, key_equivalent:
+             {
+                 {
+                     let mut lock = window_state.as_ref().lock();
+-                    lock.keystroke_for_do_command = Some(key_down_event.keystroke.clone());
++                    lock.key_down_for_do_command = Some(key_down_event.clone());
+                     lock.do_command_handled.take();
+                     drop(lock);
+                 }
+@@ -2734,7 +2734,7 @@ extern "C" fn handle_key_event(this: &Object, native_event: id, key_equivalent:
+                     let input_context: id = msg_send![this, inputContext];
+                     msg_send![input_context, handleEvent: native_event]
+                 };
+-                window_state.as_ref().lock().keystroke_for_do_command.take();
++                window_state.as_ref().lock().key_down_for_do_command.take();
+                 if let Some(handled) = window_state.as_ref().lock().do_command_handled.take() {
+                     return handled as BOOL;
+                 } else if handled == YES {
+@@ -3513,16 +3513,12 @@ extern "C" fn attributed_substring_for_proposed_range(
+ extern "C" fn do_command_by_selector(this: &Object, _: Sel, _: Sel) {
+     let state = unsafe { get_window_state(this) };
+     let mut lock = state.as_ref().lock();
+-    let keystroke = lock.keystroke_for_do_command.take();
++    let key_down_event = lock.key_down_for_do_command.take();
+     let mut event_callback = lock.event_callback.take();
+     drop(lock);
+ 
+-    if let Some((keystroke, callback)) = keystroke.zip(event_callback.as_mut()) {
+-        let handled = (callback)(PlatformInput::KeyDown(KeyDownEvent {
+-            keystroke,
+-            is_held: false,
+-            prefer_character_input: false,
+-        }));
++    if let Some((key_down_event, callback)) = key_down_event.zip(event_callback.as_mut()) {
++        let handled = (callback)(PlatformInput::KeyDown(key_down_event));
+         state.as_ref().lock().do_command_handled = Some(!handled.propagate);
+     }
+ 
+diff --git a/crates/gpui_web/src/events.rs b/crates/gpui_web/src/events.rs
+index 9908b42..d338336 100644
+--- a/crates/gpui_web/src/events.rs
++++ b/crates/gpui_web/src/events.rs
+@@ -549,11 +549,17 @@ impl WebWindowInner {
+             key_char: None,
+         };
+         self.dispatch_input(PlatformInput::KeyDown(KeyDownEvent {
++            physical_key: None,
++            key_metadata: None,
+             keystroke: keystroke.clone(),
+             is_held: false,
+             prefer_character_input: false,
+         }));
+-        self.dispatch_input(PlatformInput::KeyUp(KeyUpEvent { keystroke }));
++        self.dispatch_input(PlatformInput::KeyUp(KeyUpEvent {
++            physical_key: None,
++            key_metadata: None,
++            keystroke,
++        }));
+     }
+ 
+     fn register_pointer_move(self: &Rc<Self>) -> EventListenerHandle {
+@@ -744,6 +750,8 @@ impl WebWindowInner {
+             };
+ 
+             let result = this.dispatch_input(PlatformInput::KeyDown(KeyDownEvent {
++                physical_key: physical_key_from_dom(&event),
++                key_metadata: None,
+                 keystroke,
+                 is_held,
+                 prefer_character_input: false,
+@@ -807,7 +815,11 @@ impl WebWindowInner {
+                 key_char,
+             };
+ 
+-            let result = this.dispatch_input(PlatformInput::KeyUp(KeyUpEvent { keystroke }));
++            let result = this.dispatch_input(PlatformInput::KeyUp(KeyUpEvent {
++                physical_key: physical_key_from_dom(&event),
++                key_metadata: None,
++                keystroke,
++            }));
+             if let Some(result) = result {
+                 if !result.propagate {
+                     event.prevent_default();
+@@ -1453,3 +1465,8 @@ mod tests {
+         assert_ne!(reused, concurrent);
+     }
+ }
++
++fn physical_key_from_dom(event: &web_sys::KeyboardEvent) -> Option<gpui::PhysicalKey> {
++    let code = event.code();
++    (!code.is_empty() && code != "Unidentified").then(|| gpui::PhysicalKey::Web(code.into()))
++}
+diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
+index c0e2cd4..452a7de 100644
+--- a/crates/gpui_windows/src/events.rs
++++ b/crates/gpui_windows/src/events.rs
+@@ -400,8 +400,12 @@ impl WindowsWindowInner {
+     }
+ 
+     fn handle_syskeyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
+-        let input = handle_key_event(wparam, lparam, &self.state, |keystroke, _| {
+-            PlatformInput::KeyUp(KeyUpEvent { keystroke })
++        let input = handle_key_event(wparam, lparam, &self.state, |keystroke, _, metadata| {
++            PlatformInput::KeyUp(KeyUpEvent {
++                physical_key: physical_key_from_lparam(lparam),
++                key_metadata: Some(metadata),
++                keystroke,
++            })
+         })?;
+         let mut func = self.state.callbacks.input.take()?;
+ 
+@@ -419,8 +423,10 @@ impl WindowsWindowInner {
+             wparam,
+             lparam,
+             &self.state,
+-            |keystroke, prefer_character_input| {
++            |keystroke, prefer_character_input, metadata| {
+                 PlatformInput::KeyDown(KeyDownEvent {
++                    physical_key: physical_key_from_lparam(lparam),
++                    key_metadata: Some(metadata),
+                     keystroke,
+                     is_held: lparam.0 & (0x1 << 30) > 0,
+                     prefer_character_input,
+@@ -442,9 +448,15 @@ impl WindowsWindowInner {
+     }
+ 
+     fn handle_keyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
+-        let Some(input) = handle_key_event(wparam, lparam, &self.state, |keystroke, _| {
+-            PlatformInput::KeyUp(KeyUpEvent { keystroke })
+-        }) else {
++        let Some(input) =
++            handle_key_event(wparam, lparam, &self.state, |keystroke, _, metadata| {
++                PlatformInput::KeyUp(KeyUpEvent {
++                    physical_key: physical_key_from_lparam(lparam),
++                    key_metadata: Some(metadata),
++                    keystroke,
++                })
++            })
++        else {
+             return Some(1);
+         };
+ 
+@@ -1494,7 +1506,7 @@ fn handle_key_event<F>(
+     f: F,
+ ) -> Option<PlatformInput>
+ where
+-    F: FnOnce(Keystroke, bool) -> PlatformInput,
++    F: FnOnce(Keystroke, bool, KeyEventMetadata) -> PlatformInput,
+ {
+     let virtual_key = VIRTUAL_KEY(wparam.loword());
+     let modifiers = current_modifiers();
+@@ -1531,8 +1543,24 @@ where
+             }))
+         }
+         vkey => {
++            // Keep native layout facts separate from shortcut normalization.
++            // ToUnicode's no-state-change flag in generate_key_char preserves
++            // the dead-key state that Windows uses for subsequent WM_CHAR/IME.
++            let metadata = KeyEventMetadata {
++                unmodified_text: generate_key_char(
++                    vkey,
++                    u32::from(lparam.hiword() & 0xFF),
++                    false,
++                    false,
++                    false,
++                )
++                .map(Into::into),
++                modifiers,
++                caps_lock: current_capslock().on,
++                num_lock: unsafe { GetKeyState(VK_NUMLOCK.0 as i32) & 1 } != 0,
++            };
+             let keystroke = parse_normal_key(vkey, lparam, modifiers)?;
+-            Some(f(keystroke.0, keystroke.1))
++            Some(f(keystroke.0, keystroke.1, metadata))
+         }
+     }
+ }
+@@ -1802,3 +1830,27 @@ fn notify_frame_changed(handle: HWND) {
+         .log_err();
+     }
+ }
++
++// Key-up and repeat flags occupy higher bits and must not affect identity.
++fn physical_key_from_lparam(lparam: LPARAM) -> Option<gpui::PhysicalKey> {
++    let code = ((lparam.0 as usize >> 16) & 0x1ff) as u32;
++    (code & 0xff != 0).then_some(gpui::PhysicalKey::Native(code))
++}
++
++#[cfg(test)]
++mod physical_key_tests {
++    use super::physical_key_from_lparam;
++    use windows::Win32::Foundation::LPARAM;
++    #[test]
++    fn physical_key_keeps_extended_bit_but_ignores_press_repeat_release_flags() {
++        let normal = physical_key_from_lparam(LPARAM(0x001c0001));
++        assert_eq!(normal, Some(gpui::PhysicalKey::Native(0x1c)));
++        assert_eq!(
++            normal,
++            physical_key_from_lparam(LPARAM(0xc01c0001u32 as isize))
++        );
++        assert_eq!(normal, physical_key_from_lparam(LPARAM(0x401c0001)));
++        assert_ne!(normal, physical_key_from_lparam(LPARAM(0x011c0001)));
++        assert_eq!(physical_key_from_lparam(LPARAM(0)), None);
++    }
++}
+diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
+index c467101..6466108 100644
+--- a/crates/gpui_windows/src/window.rs
++++ b/crates/gpui_windows/src/window.rs
+@@ -710,6 +710,10 @@ impl PlatformWindow for WindowsWindow {
+         current_capslock()
+     }
+ 
++    fn numlock(&self) -> Option<bool> {
++        Some(unsafe { GetKeyState(VK_NUMLOCK.0 as i32) & 1 != 0 })
++    }
++
+     fn set_input_handler(&mut self, input_handler: PlatformInputHandler) {
+         self.state.input_handler.set(Some(input_handler));
+     }

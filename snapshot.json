@@ -1,0 +1,227 @@
+{
+  "version": "0.3.9",
+  "zed": {
+    "url": "https://github.com/zed-industries/zed",
+    "rev": "93d745668805029476e6d7fbb19652116fed51de"
+  },
+  "crates": [
+    {
+      "name": "gpui-pre-util",
+      "zed_name": "gpui_util",
+      "zed_version": "0.1.0",
+      "path": "crates/gpui_util",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-collections",
+      "zed_name": "collections",
+      "zed_version": "0.1.0",
+      "path": "crates/collections",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-bench-metrics",
+      "zed_name": "bench_metrics",
+      "zed_version": "0.1.0",
+      "path": "crates/bench_metrics",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-macros",
+      "zed_name": "gpui_macros",
+      "zed_version": "0.1.0",
+      "path": "crates/gpui_macros",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-shared-string",
+      "zed_name": "gpui_shared_string",
+      "zed_version": "0.1.0",
+      "path": "crates/gpui_shared_string",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-http-client",
+      "zed_name": "http_client",
+      "zed_version": "0.1.0",
+      "path": "crates/http_client",
+      "dropped_dependencies": [
+        "async-tar",
+        "async-compression",
+        "util",
+        "async-fs",
+        "sha2",
+        "tempfile"
+      ],
+      "dropped_features": [
+        "github-download"
+      ],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-derive-refineable",
+      "zed_name": "derive_refineable",
+      "zed_version": "0.1.0",
+      "path": "crates/refineable/derive_refineable",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-refineable",
+      "zed_name": "refineable",
+      "zed_version": "0.1.0",
+      "path": "crates/refineable",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-scheduler",
+      "zed_name": "scheduler",
+      "zed_version": "0.1.0",
+      "path": "crates/scheduler",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-zlog",
+      "zed_name": "zlog",
+      "zed_version": "0.1.0",
+      "path": "crates/zlog",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-ztracing-macro",
+      "zed_name": "ztracing_macro",
+      "zed_version": "0.1.0",
+      "path": "crates/ztracing_macro",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-ztracing",
+      "zed_name": "ztracing",
+      "zed_version": "0.1.0",
+      "path": "crates/ztracing",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-sum-tree",
+      "zed_name": "sum_tree",
+      "zed_version": "0.1.0",
+      "path": "crates/sum_tree",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre",
+      "zed_name": "gpui",
+      "zed_version": "0.2.2",
+      "path": "crates/gpui",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-apple",
+      "zed_name": "gpui_apple",
+      "zed_version": "0.1.0",
+      "path": "crates/gpui_apple",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-macos",
+      "zed_name": "gpui_macos",
+      "zed_version": "0.1.0",
+      "path": "crates/gpui_macos",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-windows",
+      "zed_name": "gpui_windows",
+      "zed_version": "0.1.0",
+      "path": "crates/gpui_windows",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-wgpu",
+      "zed_name": "gpui_wgpu",
+      "zed_version": "0.1.0",
+      "path": "crates/gpui_wgpu",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-linux",
+      "zed_name": "gpui_linux",
+      "zed_version": "0.1.0",
+      "path": "crates/gpui_linux",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-web",
+      "zed_name": "gpui_web",
+      "zed_version": "0.1.0",
+      "path": "crates/gpui_web",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": [
+        "unicode-properties"
+      ]
+    },
+    {
+      "name": "gpui-pre-platform",
+      "zed_name": "gpui_platform",
+      "zed_version": "0.1.0",
+      "path": "crates/gpui_platform",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-http-client-tls",
+      "zed_name": "http_client_tls",
+      "zed_version": "0.1.0",
+      "path": "crates/http_client_tls",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    },
+    {
+      "name": "gpui-pre-reqwest-client",
+      "zed_name": "reqwest_client",
+      "zed_version": "0.1.0",
+      "path": "crates/reqwest_client",
+      "dropped_dependencies": [],
+      "dropped_features": [],
+      "relaxed_dependencies": []
+    }
+  ]
+}
