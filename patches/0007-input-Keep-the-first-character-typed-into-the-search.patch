@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ruiyangke <me@ry.ke>
+Date: Tue, 20 Oct 2026 15:04:51 -0700
+Subject: [PATCH] input: Keep the first character typed into the search panel
+
+Since 0660be4c, set_search_query anchors a changed query to the viewport.
+The panel's own typing calls it, so the first character moves the anchor
+from None to the viewport start. The overlay compared anchors to tell the
+panel's echo from an outside change, so it re-showed the panel, which
+selects the query, and the next keystroke replaced it: typing "Docker"
+after opening search left "ocker".
+
+An anchor change is now part of the echo when the panel already holds the
+session's query. Opening search again still re-shows the panel, because it
+bumps the activation revision.
+
+Send upstream.
+---
+ crates/component/src/input/overlay.rs        |  4 +++-
+ crates/kit/tests/integration/input/editor.rs | 22 ++++++++++++++++++++
+ 2 files changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/crates/component/src/input/overlay.rs b/crates/component/src/input/overlay.rs
+index 3de83aeb..f506939d 100644
+--- a/crates/component/src/input/overlay.rs
++++ b/crates/component/src/input/overlay.rs
+@@ -354,12 +354,14 @@ impl<M: OverlayMode> InputOverlayHost<M> {
+             // session. Re-showing it for that echo would select the query or steal
+             // focus from replacement, so preserve changes the panel already holds.
+             // External mode changes still move focus out of a hidden replace field.
++            // A query typed in the panel also anchors the session to the viewport.
++            // That anchor is part of the echo: re-showing would select the first
++            // typed character, and the next keystroke would replace it.
+             let was = &self.search_signature;
+             let query_echo = search_open
+                 && was.open
+                 && (was.replace_mode == search_signature.replace_mode
+                     || panel_replace_mode == search_signature.replace_mode)
+-                && was.anchor_offset == search_signature.anchor_offset
+                 && was.activation_revision == search_signature.activation_revision
+                 && self.search.read(cx).query(cx) == search_session.query;
+             self.search_signature = search_signature;
+diff --git a/crates/kit/tests/integration/input/editor.rs b/crates/kit/tests/integration/input/editor.rs
+index 16aae173..d9c97f27 100644
+--- a/crates/kit/tests/integration/input/editor.rs
++++ b/crates/kit/tests/integration/input/editor.rs
+@@ -397,6 +397,28 @@ fn multicursor_vertical_selection_replaces_and_undoes_each_range(cx: &mut TestAp
+     .unwrap();
+ }
+ 
++#[gpui_kit::test]
++fn typing_into_the_opened_search_panel_keeps_every_character(cx: &mut TestAppContext) {
++    let (handle, state) = editor(cx, "plaintext", "Docker docker");
++    cx.update_window(handle.into(), |_, window, cx| {
++        window.click(("input", state.entity_id()), cx);
++        window.press("secondary-f", cx);
++    })
++    .unwrap();
++    cx.run_until_parked();
++    // A window draws between keystrokes; the first character must survive
++    // the frame after it changes the query.
++    let cx = &mut gpui_kit::VisualTestContext::from_window(handle.into(), cx);
++    for character in ["D", "o", "c", "k", "e", "r"] {
++        cx.simulate_input(character);
++        cx.update(|window, cx| window.draw(cx).clear(cx));
++    }
++    assert_eq!(
++        state.read_with(cx, |state, _| state.search_session().query.clone()),
++        "Docker"
++    );
++}
++
+ #[gpui_kit::test]
+ fn search_keyboard_navigation_wraps_and_escape_returns_editor_focus(cx: &mut TestAppContext) {
+     let (handle, state) = editor(cx, "plaintext", "one two one");

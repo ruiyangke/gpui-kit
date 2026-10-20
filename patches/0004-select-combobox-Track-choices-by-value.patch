@@ -1,0 +1,891 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ruiyangke <me@ry.ke>
+Date: Tue, 20 Oct 2026 15:04:50 -0700
+Subject: [PATCH] select, combobox: Track choices by value
+
+Row indices are positions in the filtered or paged list, not items. A search
+or page response can replace a row between Enter and the deferred confirm.
+
+- The searchable list confirms the item itself. Select's deferred confirm,
+  cancel and query reset find the item by value again.
+- Combobox compares selected values, not rows, before and after
+  on_will_change. Replacing A at row 0 with filtered B at row 0 now emits
+  Change and Confirm; moving the same value to another row does not.
+- ComboboxEvent::Activate reports an accepted activation, separately from
+  Confirm, which also fires on dismissal. Activating the current item closes
+  a single-select combobox without a false Change.
+- ComboboxState::close dismisses without focus changes or selection events.
+- Select::is_open, Select::menu_scroll_handle and
+  Select::menu_item_min_height (a minimum row height independent of the
+  trigger size).
+- List rows report to test-support snapshots, so tests can measure menu
+  rows.
+
+Remove when upstream confirms by value and offers these hooks.
+---
+ crates/component/src/combobox.rs              | 249 ++++++++++++++++-
+ crates/component/src/list/list.rs             |   2 +
+ .../component/src/searchable_list/adapter.rs  |  18 +-
+ crates/component/src/searchable_list/state.rs |   2 +-
+ crates/component/src/select.rs                | 254 +++++++++++++++++-
+ crates/kit/tests/integration/search.rs        |   1 +
+ 6 files changed, 497 insertions(+), 29 deletions(-)
+
+diff --git a/crates/component/src/combobox.rs b/crates/component/src/combobox.rs
+index 709a49d2..0a3cefb0 100644
+--- a/crates/component/src/combobox.rs
++++ b/crates/component/src/combobox.rs
+@@ -132,6 +132,9 @@ where
+ {
+     /// Emitted on every toggle (item added or removed).
+     Change(Vec<<D::Item as SearchableListItem>::Value>),
++    /// Accepted single-select item activation, including the current item.
++    /// Unlike Confirm, this is never emitted for Escape or outside dismissal.
++    Activate(Vec<<D::Item as SearchableListItem>::Value>),
+     /// Emitted when the popover closes.
+     Confirm(Vec<<D::Item as SearchableListItem>::Value>),
+ }
+@@ -156,17 +159,31 @@ where
+         let state = SearchableListState::new(
+             delegate,
+             selected_indices,
+-            move |selected_index, _secondary, window, cx| {
++            move |selected_item, _secondary, window, cx| {
+                 cx.defer_in(window, {
+                     let weak_confirm = weak_confirm.clone();
+                     move |list_state, window, cx| {
+-                        let Some(index) = selected_index else {
++                        let Some(selected_item) = selected_item else {
++                            return;
++                        };
++                        let Some(index) = list_state
++                            .delegate()
++                            .delegate
++                            .position(selected_item.value())
++                        else {
+                             return;
+                         };
+ 
+                         let Some(item) = list_state.delegate().delegate.item(index).cloned() else {
+                             return;
+                         };
++                        if !list_state
++                            .delegate()
++                            .delegate
++                            .is_item_enabled(index, &item, cx)
++                        {
++                            return;
++                        }
+ 
+                         let ix = index;
+ 
+@@ -181,8 +198,11 @@ where
+ 
+                         let changes = Self::selection_changes(multiple, &selection, ix, &item);
+ 
+-                        let before_indices: Vec<IndexPath> =
+-                            selection.iter().map(|(ix, _)| *ix).collect();
++                        // Filtering can replace an item without changing its row index.
++                        let before_values: Vec<_> = selection
++                            .iter()
++                            .map(|(_, item)| item.value().clone())
++                            .collect();
+ 
+                         // on_will_change is called directly — entity-handle access would
+                         // re-enter the ListState lock that defer_in holds for this callback.
+@@ -191,10 +211,13 @@ where
+                             .delegate
+                             .on_will_change(&mut selection, &changes);
+ 
+-                        let after_indices: Vec<IndexPath> =
+-                            selection.iter().map(|(ix, _)| *ix).collect();
+-                        let changed = before_indices != after_indices;
+-                        let should_close = changed && !multiple;
++                        let after_values: Vec<_> = selection
++                            .iter()
++                            .map(|(_, item)| item.value().clone())
++                            .collect();
++                        let changed = before_values != after_values;
++                        let should_close =
++                            !multiple && after_values.iter().any(|value| value == item.value());
+ 
+                         let new_selection = weak_confirm.update(cx, |this, cx| {
+                             this.state.selection = selection;
+@@ -205,6 +228,7 @@ where
+                             }
+ 
+                             if should_close {
++                                cx.emit(ComboboxEvent::Activate(this.selected_values()));
+                                 cx.emit(ComboboxEvent::Confirm(this.selected_values()));
+                                 this.set_open(false, cx);
+                                 this.focus(window, cx);
+@@ -398,6 +422,14 @@ where
+         self.state.list.read(cx).query_input.read(cx).value()
+     }
+ 
++    /// Dismiss for an application-owned transition without moving focus or
++    /// committing a selection. The caller can focus its destination afterward.
++    pub fn close(&mut self, cx: &mut Context<Self>) {
++        if self.state.open {
++            self.set_open(false, cx);
++        }
++    }
++
+     /// Sets the search query and updates the filtered items.
+     pub fn set_query(&self, query: impl Into<SharedString>, window: &mut Window, cx: &mut App) {
+         let query = query.into();
+@@ -457,7 +489,10 @@ where
+         let changes = Self::selection_changes(self.multiple, &self.state.selection, ix, &item);
+ 
+         let mut selection = self.state.selection.clone();
+-        let before_indices: Vec<IndexPath> = selection.iter().map(|(ix, _)| *ix).collect();
++        let before_values: Vec<_> = selection
++            .iter()
++            .map(|(_, item)| item.value().clone())
++            .collect();
+ 
+         self.state.list.update(cx, |list, _cx| {
+             list.delegate_mut()
+@@ -465,9 +500,12 @@ where
+                 .on_will_change(&mut selection, &changes);
+         });
+ 
+-        let after_indices: Vec<IndexPath> = selection.iter().map(|(ix, _)| *ix).collect();
+-        let changed = before_indices != after_indices;
+-        let should_close = changed && !self.multiple;
++        let after_values: Vec<_> = selection
++            .iter()
++            .map(|(_, item)| item.value().clone())
++            .collect();
++        let changed = before_values != after_values;
++        let should_close = !self.multiple && after_values.iter().any(|value| value == item.value());
+ 
+         self.state.selection = selection;
+         self.state.sync_snapshot(cx);
+@@ -483,6 +521,7 @@ where
+                 list.delegate_mut().delegate.on_confirm(&final_selection);
+             });
+ 
++            cx.emit(ComboboxEvent::Activate(self.selected_values()));
+             cx.emit(ComboboxEvent::Confirm(self.selected_values()));
+             self.set_open(false, cx);
+             self.focus(window, cx);
+@@ -1082,7 +1121,10 @@ fn render_popup_shell<D: SearchableListDelegate + 'static>(
+ 
+ #[cfg(test)]
+ mod tests {
+-    use std::{cell::Cell, rc::Rc};
++    use std::{
++        cell::{Cell, RefCell},
++        rc::Rc,
++    };
+ 
+     use gpui::{
+         AppContext as _, Bounds, Context, Entity, Modifiers, MouseButton, MouseDownEvent, Pixels,
+@@ -1100,6 +1142,8 @@ mod tests {
+ 
+     struct TestComboboxEventCollector {
+         event_count: Rc<Cell<usize>>,
++        events: Rc<RefCell<Vec<(bool, Vec<&'static str>)>>>,
++        activations: Vec<Vec<&'static str>>,
+         _subscription: Subscription,
+     }
+ 
+@@ -1110,20 +1154,192 @@ mod tests {
+         ) -> Self {
+             let event_count = Rc::new(Cell::new(0));
+             let event_count_for_subscription = event_count.clone();
++            let events = Rc::new(RefCell::new(Vec::new()));
++            let events_for_subscription = events.clone();
+             let _subscription = cx.subscribe(
+                 state,
+-                move |_, _, _: &ComboboxEvent<SearchableVec<&'static str>>, _| {
++                move |this, _, event: &ComboboxEvent<SearchableVec<&'static str>>, _| {
++                    if let ComboboxEvent::Activate(values) = event {
++                        this.activations.push(values.clone());
++                        return;
++                    }
+                     event_count_for_subscription.set(event_count_for_subscription.get() + 1);
++                    events_for_subscription.borrow_mut().push(match event {
++                        ComboboxEvent::Change(values) => (false, values.clone()),
++                        ComboboxEvent::Confirm(values) => (true, values.clone()),
++                        ComboboxEvent::Activate(_) => unreachable!(),
++                    });
+                 },
+             );
+ 
+             Self {
+                 event_count,
++                events,
++                activations: Vec::new(),
+                 _subscription,
+             }
+         }
+     }
+ 
++    // Filtering gives a different value the same row index as the old selection.
++    fn assert_current_item_activation(cx: &mut TestAppContext, through_list: bool) {
++        use crate::list::ListDelegate as _;
++        cx.update(crate::init);
++        let cx = cx.add_empty_window();
++        let state = cx.update(|window, cx| {
++            cx.new(|cx| {
++                ComboboxState::new(
++                    SearchableVec::new(vec!["React", "Vue"]),
++                    vec![IndexPath::new(0)],
++                    window,
++                    cx,
++                )
++            })
++        });
++        let collector = cx.update(|_, cx| cx.new(|cx| TestComboboxEventCollector::new(&state, cx)));
++        cx.update(|window, cx| {
++            state.update(cx, |state, cx| {
++                state.set_open(true, cx);
++                if through_list {
++                    state.state.list.update(cx, |list, cx| {
++                        list.delegate_mut().confirm(false, window, cx)
++                    });
++                } else {
++                    state.handle_item_select(IndexPath::new(0), window, cx);
++                }
++            })
++        });
++        cx.update(|window, cx| {
++            assert!(!state.read(cx).state.open);
++            assert_eq!(collector.read(cx).activations, vec![vec!["React"]]);
++            assert_eq!(
++                *collector.read(cx).events.borrow(),
++                vec![(true, vec!["React"])]
++            );
++            state.update(cx, |state, cx| {
++                state.set_open(true, cx);
++                state.dismiss(&left_press(point(px(200.), px(200.))), window, cx);
++            });
++        });
++        cx.update(|_, cx| {
++            assert_eq!(
++                collector.read(cx).activations,
++                vec![vec!["React"]],
++                "dismissal must not activate the current server"
++            );
++        });
++    }
++
++    #[gpui::test]
++    fn current_item_direct_activation_closes_without_change(cx: &mut TestAppContext) {
++        assert_current_item_activation(cx, false);
++    }
++    #[gpui::test]
++    fn current_item_list_activation_closes_without_change(cx: &mut TestAppContext) {
++        assert_current_item_activation(cx, true);
++    }
++
++    // Exercise both the direct handler and the deferred ListDelegate confirmation.
++    fn assert_filtered_row_replacement(cx: &mut TestAppContext, through_list: bool) {
++        use crate::list::ListDelegate as _;
++
++        cx.update(crate::init);
++        let cx = cx.add_empty_window();
++        let state = cx.update(|window, cx| {
++            cx.new(|cx| {
++                ComboboxState::new(
++                    SearchableVec::new(vec!["React", "Vue"]),
++                    vec![IndexPath::new(0)],
++                    window,
++                    cx,
++                )
++                .searchable(true)
++            })
++        });
++        let collector = cx.update(|_, cx| cx.new(|cx| TestComboboxEventCollector::new(&state, cx)));
++
++        cx.update(|window, cx| {
++            state.update(cx, |state, cx| {
++                state.set_open(true, cx);
++                state.state.list.update(cx, |list, cx| {
++                    let _ = list
++                        .delegate_mut()
++                        .delegate
++                        .perform_search("Vue", window, cx);
++                    list.set_selected_index(Some(IndexPath::new(0)), window, cx);
++                });
++                assert_eq!(state.selected_values(), vec!["React"]);
++                assert_eq!(
++                    state
++                        .state
++                        .list
++                        .read(cx)
++                        .delegate()
++                        .delegate
++                        .item(IndexPath::new(0)),
++                    Some(&"Vue"),
++                );
++                if through_list {
++                    state.state.list.update(cx, |list, cx| {
++                        list.delegate_mut().confirm(false, window, cx);
++                    });
++                } else {
++                    state.handle_item_select(IndexPath::new(0), window, cx);
++                }
++            });
++        });
++
++        cx.update(|_, cx| {
++            assert_eq!(state.read(cx).selected_values(), vec!["Vue"]);
++            assert!(
++                !state.read(cx).state.open,
++                "single selection must close the popover"
++            );
++            assert_eq!(
++                *collector.read(cx).events.borrow(),
++                vec![(false, vec!["Vue"]), (true, vec!["Vue"])],
++                "emit Change then Confirm with the new value exactly once",
++            );
++        });
++    }
++
++    #[gpui::test]
++    fn test_filtered_row_replacement_direct(cx: &mut TestAppContext) {
++        assert_filtered_row_replacement(cx, false);
++    }
++
++    #[gpui::test]
++    fn test_filtered_row_replacement_list_confirm(cx: &mut TestAppContext) {
++        assert_filtered_row_replacement(cx, true);
++    }
++
++    #[gpui::test]
++    fn close_preserves_selection_and_releases_popup_context(cx: &mut TestAppContext) {
++        cx.update(crate::init);
++        let cx = cx.add_empty_window();
++        cx.update(|window, cx| {
++            let state = cx.new(|cx| {
++                ComboboxState::new(
++                    SearchableVec::new(vec!["Rust", "Go"]),
++                    vec![IndexPath::new(0)],
++                    window,
++                    cx,
++                )
++            });
++            let collector = cx.new(|cx| TestComboboxEventCollector::new(&state, cx));
++            state.update(cx, |state, cx| {
++                state.set_open(true, cx);
++                assert!(state.state.deferred_context.is_some());
++                state.close(cx);
++                state.close(cx);
++                assert!(!state.state.open);
++                assert!(state.state.deferred_context.is_none());
++                assert_eq!(state.selected_values(), vec!["Rust"]);
++            });
++            assert_eq!(collector.read(cx).event_count.get(), 0);
++        });
++    }
++
+     #[gpui::test]
+     fn test_combo_box_builder(cx: &mut TestAppContext) {
+         cx.update(crate::init);
+@@ -1576,11 +1792,16 @@ mod tests {
+ 
+             // Simulate a click on index 1 via handle_item_select; on_will_change vetoes it.
+             state.update(cx, |s, cx| {
++                s.set_open(true, cx);
+                 s.handle_item_select(IndexPath::new(1), window, cx);
+             });
+ 
+             // Selection must remain unchanged because on_will_change left it unmodified.
+             assert_eq!(state.read(cx).selected_values(), &["Rust"]);
++            assert!(
++                state.read(cx).state.open,
++                "a vetoed selection must leave the menu open"
++            );
+         });
+     }
+ 
+diff --git a/crates/component/src/list/list.rs b/crates/component/src/list/list.rs
+index 157ea268..b8611358 100644
+--- a/crates/component/src/list/list.rs
++++ b/crates/component/src/list/list.rs
+@@ -21,6 +21,7 @@ use gpui::{
+     AppContext, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
+     Length, MouseButton, ParentElement, Render, Styled, Task, Window, div, prelude::FluentBuilder,
+ };
++use gpui_base::TestSupportExt as _;
+ use rust_i18n::t;
+ 
+ pub(crate) fn init(cx: &mut App) {
+@@ -493,6 +494,7 @@ where
+ 
+         div()
+             .id(id)
++            .test_support()
+             .role(Role::ListItem)
+             .aria_position_in_set(ix.row + 1)
+             .aria_size_of_set(total_items)
+diff --git a/crates/component/src/searchable_list/adapter.rs b/crates/component/src/searchable_list/adapter.rs
+index 9cdc348c..ff477f37 100644
+--- a/crates/component/src/searchable_list/adapter.rs
++++ b/crates/component/src/searchable_list/adapter.rs
+@@ -1,4 +1,7 @@
+-use gpui::{AnyElement, App, Context, IntoElement, ParentElement as _, Styled as _, Window, div};
++use gpui::{
++    AnyElement, App, Context, IntoElement, ParentElement as _, Pixels, Styled as _, Window, div,
++    prelude::FluentBuilder as _,
++};
+ 
+ use crate::{
+     ActiveTheme, Disableable as _, Icon, IconName, IndexPath, Sizable as _, Size, StyleSized as _,
+@@ -25,12 +28,13 @@ pub(crate) struct SearchableListAdapter<D: SearchableListDelegate + 'static> {
+     pub(crate) selection_snapshot: Vec<(IndexPath, D::Item)>,
+     /// Called when the user confirms an item (click or Enter).
+     on_confirm:
+-        Box<dyn Fn(Option<IndexPath>, bool, &mut Window, &mut Context<ListState<Self>>) + 'static>,
++        Box<dyn Fn(Option<D::Item>, bool, &mut Window, &mut Context<ListState<Self>>) + 'static>,
+     /// Called when the user cancels (Escape) or focus leaves the dropdown.
+     on_cancel: Box<dyn Fn(Option<IndexPath>, &mut Window, &mut Context<ListState<Self>>) + 'static>,
+     /// Renders the empty-state placeholder.
+     on_render_empty: Box<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>,
+     pub(crate) size: Size,
++    pub(crate) item_min_height: Option<Pixels>,
+     /// Override the trailing check icon; defaults to `IconName::Check`.
+     pub(crate) check_icon: Option<Icon>,
+ }
+@@ -38,8 +42,7 @@ pub(crate) struct SearchableListAdapter<D: SearchableListDelegate + 'static> {
+ impl<D: SearchableListDelegate + 'static> SearchableListAdapter<D> {
+     pub(crate) fn new(
+         delegate: D,
+-        on_confirm: impl Fn(Option<IndexPath>, bool, &mut Window, &mut Context<ListState<Self>>)
+-        + 'static,
++        on_confirm: impl Fn(Option<D::Item>, bool, &mut Window, &mut Context<ListState<Self>>) + 'static,
+         on_cancel: impl Fn(Option<IndexPath>, &mut Window, &mut Context<ListState<Self>>) + 'static,
+         on_render_empty: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
+     ) -> Self {
+@@ -51,6 +54,7 @@ impl<D: SearchableListDelegate + 'static> SearchableListAdapter<D> {
+             on_cancel: Box::new(on_cancel),
+             on_render_empty: Box::new(on_render_empty),
+             size: Size::default(),
++            item_min_height: None,
+             check_icon: None,
+         }
+     }
+@@ -120,6 +124,7 @@ impl<D: SearchableListDelegate + 'static> ListDelegate for SearchableListAdapter
+                 SearchableListItemElement::new(ix.row)
+                     .disabled(disabled)
+                     .with_size(size)
++                    .when_some(self.item_min_height, |row, height| row.min_h(height))
+                     .child(el),
+             );
+         }
+@@ -140,6 +145,7 @@ impl<D: SearchableListDelegate + 'static> ListDelegate for SearchableListAdapter
+                 .check_icon(check_icon)
+                 .disabled(disabled)
+                 .with_size(size)
++                .when_some(self.item_min_height, |row, height| row.min_h(height))
+                 .child(content.into_any_element()),
+         )
+     }
+@@ -159,7 +165,9 @@ impl<D: SearchableListDelegate + 'static> ListDelegate for SearchableListAdapter
+         if !self.delegate.is_item_enabled(ix, item, cx) {
+             return;
+         }
+-        (self.on_confirm)(self.selected_index, secondary, window, cx);
++        // Pass the item, not its row: search or a page response may replace
++        // this row before the owner's deferred callback runs.
++        (self.on_confirm)(Some(item.clone()), secondary, window, cx);
+     }
+ 
+     fn perform_search(
+diff --git a/crates/component/src/searchable_list/state.rs b/crates/component/src/searchable_list/state.rs
+index 40accefa..bd20ca9d 100644
+--- a/crates/component/src/searchable_list/state.rs
++++ b/crates/component/src/searchable_list/state.rs
+@@ -58,7 +58,7 @@ where
+         delegate: D,
+         selected_indices: Vec<IndexPath>,
+         on_confirm: impl Fn(
+-            Option<IndexPath>,
++            Option<D::Item>,
+             bool,
+             &mut Window,
+             &mut Context<ListState<SearchableListAdapter<D>>>,
+diff --git a/crates/component/src/select.rs b/crates/component/src/select.rs
+index 2663df5d..0aa1b651 100644
+--- a/crates/component/src/select.rs
++++ b/crates/component/src/select.rs
+@@ -1,7 +1,7 @@
+ use gpui::{
+     AnyElement, App, ClickEvent, Context, DismissEvent, Edges, ElementId, Entity, EventEmitter,
+-    FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement, Length, ParentElement, Render,
+-    RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window,
++    FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement, Length, ParentElement, Pixels,
++    Render, RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window,
+     deferred, div, prelude::FluentBuilder, px, rems,
+ };
+ use gpui_base::TestSupportExt as _;
+@@ -89,6 +89,7 @@ struct SelectOptions {
+     menu_width: Length,
+     menu_max_h: Length,
+     scroll_bounce: Option<bool>,
++    menu_item_min_height: Option<Pixels>,
+     disabled: bool,
+     appearance: bool,
+     focus_ring_enabled: bool,
+@@ -107,6 +108,7 @@ impl Default for SelectOptions {
+             menu_width: Length::Auto,
+             menu_max_h: rems(20.).into(),
+             scroll_bounce: None,
++            menu_item_min_height: None,
+             disabled: false,
+             appearance: true,
+             focus_ring_enabled: true,
+@@ -131,6 +133,7 @@ where
+     icon: Option<Icon>,
+     title_prefix: Option<SharedString>,
+     focus_ring_enabled: bool,
++    menu_item_min_height: Option<Pixels>,
+ }
+ 
+ /// A Select element.
+@@ -168,10 +171,26 @@ where
+             delegate,
+             selected_indices,
+             // on_confirm — commit the selection
+-            move |selected_index, _secondary, window, cx| {
++            move |selected_item, _secondary, window, cx| {
+                 cx.defer_in(window, {
+                     let weak_confirm = weak_confirm.clone();
+                     move |list_state, window, cx| {
++                        // A page/search replacement can remove the keyboard
++                        // cursor before its deferred confirmation runs.
++                        let delegate = &list_state.delegate().delegate;
++                        let Some(selected_item) = selected_item else {
++                            return;
++                        };
++                        let Some(ix) = delegate.position(selected_item.value()) else {
++                            return;
++                        };
++                        let Some(item) = delegate.item(ix) else {
++                            return;
++                        };
++                        if !delegate.is_item_enabled(ix, item, cx) {
++                            return;
++                        }
++                        let selected_index = Some(ix);
+                         let mut selection = weak_confirm
+                             .upgrade()
+                             .map(|e| e.read(cx).state.selection.clone())
+@@ -253,13 +272,20 @@ where
+                 cx.defer_in(window, {
+                     let weak_cancel = weak_cancel.clone();
+                     move |list_state, window, cx| {
+-                        let committed_ix = weak_cancel
+-                            .upgrade()
+-                            .and_then(|e| e.read(cx).state.selection.first().map(|(ix, _)| *ix));
++                        let committed_value = weak_cancel.upgrade().and_then(|e| {
++                            e.read(cx)
++                                .state
++                                .selection
++                                .first()
++                                .map(|(_, item)| item.value().clone())
++                        });
+ 
+                         if !list_state.query_input.read(cx).value().is_empty() {
+                             list_state.set_query("", window, cx);
+                         }
++                        let committed_ix = committed_value
++                            .as_ref()
++                            .and_then(|value| list_state.delegate().delegate.position(value));
+                         list_state.set_selected_index(committed_ix, window, cx);
+ 
+                         _ = weak_cancel.update(cx, |this, cx| {
+@@ -296,6 +322,7 @@ where
+             icon: None,
+             title_prefix: None,
+             focus_ring_enabled: true,
++            menu_item_min_height: None,
+         }
+     }
+ 
+@@ -395,6 +422,25 @@ where
+         self.state.list.read(cx).selected_index()
+     }
+ 
++    /// Whether the choice menu is open. A containing popover can defer its
++    /// outside-click dismissal while this nested menu owns pointer input.
++    pub fn is_open(&self) -> bool {
++        self.state.open
++    }
++
++    /// Current menu scroll handle, only while the menu is open. This allows
++    /// callers with paginated choices to observe scrolling without wheel hooks.
++    pub fn menu_scroll_handle(&self, cx: &App) -> Option<gpui::ScrollHandle> {
++        self.state.open.then(|| {
++            self.state
++                .list
++                .read(cx)
++                .scroll_handle()
++                .base_handle()
++                .clone()
++        })
++    }
++
+     /// Get the current selected value.
+     pub fn selected_value(&self) -> Option<&<D::Item as SearchableListItem>::Value> {
+         self.state.selection.first().map(|(_, i)| i.value())
+@@ -450,8 +496,15 @@ where
+     fn clear_query_and_restore_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+         self.state.clear_query(window, cx);
+ 
+-        let committed_ix = self.state.selection.first().map(|(ix, _)| *ix);
++        let committed_value = self
++            .state
++            .selection
++            .first()
++            .map(|(_, item)| item.value().clone());
+         self.state.list.update(cx, |list, cx| {
++            let committed_ix = committed_value
++                .as_ref()
++                .and_then(|value| list.delegate().delegate.position(value));
+             if list.selected_index() != committed_ix {
+                 list.set_selected_index(committed_ix, window, cx);
+             }
+@@ -549,6 +602,7 @@ where
+         self.state.list.update(cx, |list, cx| {
+             list.set_searchable(searchable, cx);
+             list.delegate_mut().size = self.state.size;
++            list.delegate_mut().item_min_height = self.menu_item_min_height;
+         });
+ 
+         div().size_full().relative().child(
+@@ -703,6 +757,13 @@ where
+         self
+     }
+ 
++    /// Keep option hit targets comfortable independently of the trigger size.
++    /// Content may grow beyond this minimum; the list measures the resulting row.
++    pub fn menu_item_min_height(mut self, height: Pixels) -> Self {
++        self.options.menu_item_min_height = Some(height.max(px(0.)));
++        self
++    }
++
+     /// Set the placeholder shown when no value is selected.
+     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
+         self.options.placeholder = Some(placeholder.into());
+@@ -860,6 +921,7 @@ where
+             this.state.menu_width = opts.menu_width;
+             this.state.menu_max_h = opts.menu_max_h;
+             this.state.scroll_bounce = opts.scroll_bounce;
++            this.menu_item_min_height = opts.menu_item_min_height;
+             this.state.disabled = opts.disabled;
+             this.state.appearance = opts.appearance;
+             this.focus_ring_enabled = opts.focus_ring_enabled;
+@@ -902,14 +964,104 @@ where
+ 
+ #[cfg(test)]
+ mod tests {
+-    use gpui::{AppContext as _, RenderOnce as _, TestAppContext};
++    use gpui::{
++        AppContext as _, Context, Focusable as _, IntoElement, ParentElement as _, Render,
++        RenderOnce as _, Styled as _, TestAppContext, Window, div, px,
++    };
++    use std::{cell::Cell, rc::Rc};
+ 
+     use crate::{
+-        IndexPath,
++        IndexPath, WindowExt as _,
+         searchable_list::{SearchableListDelegate as _, SearchableVec},
+         select::{Select, SelectGroup, SelectState},
+     };
+ 
++    struct DialogHost;
++
++    impl Render for DialogHost {
++        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++            div().size_full()
++        }
++    }
++
++    fn assert_select_activation_stays_in_dialog_control(cx: &mut TestAppContext, key: &str) {
++        cx.update(|cx| {
++            crate::init(cx);
++            cx.set_reduce_motion(true);
++        });
++        let (_, cx) = cx.add_window_view(|window, cx| {
++            let host = cx.new(|_| DialogHost);
++            crate::Root::new(host, window, cx)
++        });
++        let submissions = Rc::new(Cell::new(0));
++        let state = cx.update(|window, cx| {
++            let state = cx.new(|cx| {
++                SelectState::new(
++                    SearchableVec::new(vec!["SSH agent", "Private key"]),
++                    Some(IndexPath::new(0)),
++                    window,
++                    cx,
++                )
++            });
++            window.open_dialog(cx, {
++                let state = state.clone();
++                let submissions = submissions.clone();
++                move |dialog, _, _| {
++                    let submissions = submissions.clone();
++                    dialog
++                        .title("Server")
++                        .child(div().w(px(240.)).h(px(34.)).child(Select::new(&state)))
++                        .on_ok(move |_, _, _| {
++                            submissions.set(submissions.get() + 1);
++                            false
++                        })
++                }
++            });
++            state
++        });
++        cx.run_until_parked();
++        cx.update(|window, cx| {
++            window.draw(cx).clear(cx);
++            state.focus_handle(cx).focus(window, cx);
++            window.draw(cx).clear(cx);
++        });
++
++        cx.simulate_keystrokes(key);
++        cx.update(|window, cx| window.draw(cx).clear(cx));
++        assert!(state.read_with(cx, |state, _| state.is_open()));
++        assert!(state.read_with(cx, |state, cx| state.menu_scroll_handle(cx).is_some()));
++        assert_eq!(
++            submissions.get(),
++            0,
++            "opening a select must not submit its form"
++        );
++
++        cx.simulate_keystrokes("down");
++        cx.simulate_keystrokes(key);
++        cx.update(|window, cx| window.draw(cx).clear(cx));
++        assert!(!state.read_with(cx, |state, _| state.is_open()));
++        assert!(state.read_with(cx, |state, cx| state.menu_scroll_handle(cx).is_none()));
++        assert_eq!(
++            state.read_with(cx, |state, _| *state.selected_value().unwrap()),
++            "Private key"
++        );
++        assert_eq!(
++            submissions.get(),
++            0,
++            "choosing an option must not submit its form"
++        );
++    }
++
++    #[gpui::test]
++    fn space_opens_and_selects_without_submitting_its_dialog(cx: &mut TestAppContext) {
++        assert_select_activation_stays_in_dialog_control(cx, "space");
++    }
++
++    #[gpui::test]
++    fn enter_opens_and_selects_without_submitting_its_dialog(cx: &mut TestAppContext) {
++        assert_select_activation_stays_in_dialog_control(cx, "enter");
++    }
++
+     #[gpui::test]
+     fn an_explicit_accessibility_label_does_not_replace_the_placeholder(cx: &mut TestAppContext) {
+         cx.update(crate::init);
+@@ -1106,6 +1258,90 @@ mod tests {
+         });
+     }
+ 
++    #[gpui::test]
++    fn replacing_items_preserves_cursor_identity_query_and_scroll(cx: &mut TestAppContext) {
++        use crate::list::ListDelegate as _;
++        cx.update(crate::init);
++        let window = cx.add_empty_window();
++        let state = window.update(|window, cx| {
++            let state = cx.new(|cx| {
++                SelectState::new(
++                    vec!["main", "topic", "release"],
++                    Some(IndexPath::new(0)),
++                    window,
++                    cx,
++                )
++                .searchable(true)
++            });
++            let list = state.read(cx).state.list.clone();
++            list.update(cx, |list, cx| {
++                list.set_query("topic", window, cx);
++                list.set_selected_index(Some(IndexPath::new(1)), window, cx);
++                list.scroll_handle()
++                    .base_handle()
++                    .set_offset(gpui::point(px(0.), px(-28.)));
++            });
++            state.update(cx, |state, cx| {
++                state.set_open(true, cx);
++                state.set_items(vec!["extra", "release", "main", "topic"], window, cx);
++            });
++            assert_eq!(state.read(cx).selected_value(), Some(&"main"));
++            assert_eq!(state.read(cx).selected_index(cx), Some(IndexPath::new(3)));
++            assert_eq!(list.read(cx).query_input.read(cx).value(), "topic");
++            assert_eq!(
++                list.read(cx).scroll_handle().base_handle().offset().y,
++                px(-28.)
++            );
++            list.update(cx, |list, cx| {
++                list.delegate_mut().confirm(false, window, cx)
++            });
++            // A second response arrives after Enter but before its deferred
++            // callback. Confirmation must still address "topic" by value.
++            state.update(cx, |state, cx| {
++                state.set_items(vec!["topic", "main", "release"], window, cx)
++            });
++            state
++        });
++        window.run_until_parked();
++        window.update(|_, cx| {
++            assert_eq!(state.read(cx).selected_value(), Some(&"topic"));
++            assert!(!state.read(cx).is_open());
++        });
++    }
++
++    #[gpui::test]
++    fn disappearing_cursor_does_not_commit_the_replacement_row(cx: &mut TestAppContext) {
++        use crate::list::ListDelegate as _;
++        cx.update(crate::init);
++        let window = cx.add_empty_window();
++        let state = window.update(|window, cx| {
++            let state = cx.new(|cx| {
++                SelectState::new(vec!["main", "topic"], Some(IndexPath::new(0)), window, cx)
++            });
++            let list = state.read(cx).state.list.clone();
++            list.update(cx, |list, cx| {
++                list.set_selected_index(Some(IndexPath::new(1)), window, cx)
++            });
++            list.update(cx, |list, cx| {
++                list.delegate_mut().confirm(false, window, cx)
++            });
++            state.update(cx, |state, cx| {
++                state.set_open(true, cx);
++                state.set_items(vec!["main", "different"], window, cx);
++            });
++            assert_eq!(state.read(cx).selected_index(cx), None);
++            list.update(cx, |list, cx| {
++                list.delegate_mut().confirm(false, window, cx)
++            });
++            state
++        });
++        window.run_until_parked();
++        window.update(|_, cx| {
++            assert_eq!(state.read(cx).selected_value(), Some(&"main"));
++            assert!(state.read(cx).is_open());
++        });
++    }
++
+     #[derive(Clone)]
+     struct RemoteChoice {
+         value: &'static str,
+diff --git a/crates/kit/tests/integration/search.rs b/crates/kit/tests/integration/search.rs
+index fd521c84..7e889599 100644
+--- a/crates/kit/tests/integration/search.rs
++++ b/crates/kit/tests/integration/search.rs
+@@ -239,6 +239,7 @@ fn languages(
+                 cx.subscribe(&state, |this: &mut Languages, _, event, _| match event {
+                     ComboboxEvent::Change(values) => this.changes.push(values.clone()),
+                     ComboboxEvent::Confirm(values) => this.confirmations.push(values.clone()),
++                    ComboboxEvent::Activate(_) => {}
+                 });
+             Languages {
+                 state,

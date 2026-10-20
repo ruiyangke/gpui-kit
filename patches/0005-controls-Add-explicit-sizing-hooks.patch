@@ -1,0 +1,583 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ruiyangke <me@ry.ke>
+Date: Tue, 20 Oct 2026 15:04:50 -0700
+Subject: [PATCH] controls: Add explicit sizing hooks
+
+Newport sizes controls in logical pixels rather than Kit's rem-based named
+sizes, so a few controls need explicit sizing seams. Behavior is unchanged.
+
+- Button::content_style is public.
+- Pagination::item_style and Pagination::content_style style every page and
+  navigation button.
+- Switch::track_size and Switch::label_size; the thumb follows the track.
+  A disabled solid thumb is blended against the surface, so a custom light
+  thumb dims in dark mode too.
+- Checkbox and Tab honor Size::Size, and TabBar::label_size sets every
+  tab's label size.
+- Input and Textarea content_padding set the inner text inset separately
+  from the frame padding.
+
+Remove each hook when upstream offers an equivalent.
+---
+ crates/component/src/button/button.rs  |  6 +-
+ crates/component/src/checkbox.rs       | 26 ++++++---
+ crates/component/src/input/input.rs    | 42 ++++++++-----
+ crates/component/src/input/textarea.rs | 16 ++++-
+ crates/component/src/pagination.rs     | 34 ++++++++++-
+ crates/component/src/switch.rs         | 81 ++++++++++++++++++++++++--
+ crates/component/src/tab/tab.rs        | 19 ++++++
+ crates/component/src/tab/tab_bar.rs    |  9 +++
+ 8 files changed, 196 insertions(+), 37 deletions(-)
+
+diff --git a/crates/component/src/button/button.rs b/crates/component/src/button/button.rs
+index 3685c061..04acd8aa 100644
+--- a/crates/component/src/button/button.rs
++++ b/crates/component/src/button/button.rs
+@@ -302,9 +302,9 @@ impl Button {
+         self.compact
+     }
+ 
+-    /// Presentation supplied by a styled compound control. Standalone buttons
+-    /// retain their normal size-derived content style.
+-    pub(crate) fn content_style(mut self, style: StyleRefinement, icon_size: Size) -> Self {
++    /// Override the inner label presentation and icon size independently of
++    /// the hit target. Without this, the normal size-derived style is retained.
++    pub fn content_style(mut self, style: StyleRefinement, icon_size: Size) -> Self {
+         self.content_style = style;
+         self.icon_size = Some(icon_size);
+         self
+diff --git a/crates/component/src/checkbox.rs b/crates/component/src/checkbox.rs
+index 91ccf3c7..e0e6b740 100644
+--- a/crates/component/src/checkbox.rs
++++ b/crates/component/src/checkbox.rs
+@@ -8,7 +8,7 @@ use crate::{StyleSized as _, StyledExt as _, ThemeStyled as _};
+ use gpui::{
+     AnyElement, App, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement,
+     RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
+-    prelude::FluentBuilder as _, px, relative, rems, svg,
++    prelude::FluentBuilder as _, px, relative, svg,
+ };
+ use gpui_base::{CheckboxIndicator, spring};
+ 
+@@ -214,7 +214,7 @@ pub(crate) fn checkbox_check_icon(
+             Size::Small => this.size_2p5(),
+             Size::Medium => this.size_3(),
+             Size::Large => this.size_3p5(),
+-            _ => this.size_3(),
++            Size::Size(size) => this.size((size - px(4.)).max(px(0.))),
+         })
+         .text_color(color)
+         .when(opacity > 0., |this| {
+@@ -226,12 +226,18 @@ impl RenderOnce for Checkbox {
+     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+         let checked = self.checked;
+         let has_content = self.label.is_some() || !self.children.is_empty();
+-        let indicator_size = rems(match self.size {
+-            Size::XSmall => 0.75,
+-            Size::Small => 0.875,
+-            Size::Large => 1.125,
+-            _ => 1.,
+-        });
++        let indicator_size = match self.size {
++            Size::Size(size) => size,
++            size => {
++                window.rem_size()
++                    * match size {
++                        Size::XSmall => 0.75,
++                        Size::Small => 0.875,
++                        Size::Large => 1.125,
++                        _ => 1.,
++                    }
++            }
++        };
+ 
+         let base = self.base;
+         let children = self.children;
+@@ -298,7 +304,9 @@ impl RenderOnce for Checkbox {
+                     .relative()
+                     .size(indicator_size)
+                     // Center on the first 1.25em line, including when the label wraps.
+-                    .when(has_content, |this| this.mt(indicator_size * 0.125))
++                    .when(has_content && !matches!(self.size, Size::Size(_)), |this| {
++                        this.mt(indicator_size * 0.125)
++                    })
+                     .flex_shrink_0()
+                     .border_1()
+                     .rounded(radius)
+diff --git a/crates/component/src/input/input.rs b/crates/component/src/input/input.rs
+index 3d014b1d..86c28ad8 100644
+--- a/crates/component/src/input/input.rs
++++ b/crates/component/src/input/input.rs
+@@ -3,9 +3,9 @@ use std::rc::Rc;
+ use gpui::prelude::FluentBuilder as _;
+ use gpui::{
+     AccessibleAction, AnyElement, App, DefiniteLength, Edges, ElementId, Entity, Hsla,
+-    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Rems, RenderOnce, Role,
+-    SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, TextAlign, TouchPhase,
+-    Window, div, px, relative,
++    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Pixels, Rems,
++    RenderOnce, Role, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled,
++    TextAlign, TouchPhase, Window, div, px, relative,
+ };
+ 
+ use crate::button::{Button, ButtonRounded, ButtonVariants as _};
+@@ -119,6 +119,7 @@ pub struct Input {
+     prefix: Option<AnyElement>,
+     suffix: Option<AnyElement>,
+     height: Option<DefiniteLength>,
++    content_padding: Option<Edges<Pixels>>,
+     appearance: bool,
+     cleanable: bool,
+     mask_toggle: bool,
+@@ -209,6 +210,12 @@ impl Input {
+         self
+     }
+ 
++    /// Override the internal multi-line text inset, independently of frame padding.
++    pub(crate) fn content_padding(mut self, padding: Edges<Pixels>) -> Self {
++        self.content_padding = Some(padding);
++        self
++    }
++
+     /// Create a new [`Input`] element bind to the [`InputState`].
+     pub fn new(state: &Entity<InputState>) -> Self {
+         Self::with_state(state.clone().into())
+@@ -227,6 +234,7 @@ impl Input {
+             id: None,
+             state,
+             size: Size::default(),
++            content_padding: None,
+             style: StyleRefinement::default(),
+             prefix: None,
+             suffix: None,
+@@ -594,20 +602,22 @@ impl RenderOnce for Input {
+             cx,
+         );
+         state.set_editor_paddings(
+-            if state.presentation(cx).is_multi_line() {
+-                Edges {
+-                    top: self.size.input_py(),
+-                    right: self.size.input_px(),
+-                    bottom: self.size.input_py(),
+-                    left: if state.presentation(cx).is_code_editor() {
+-                        self.size.input_px().min(px(6.))
+-                    } else {
+-                        self.size.input_px()
+-                    },
++            self.content_padding.unwrap_or_else(|| {
++                if state.presentation(cx).is_multi_line() {
++                    Edges {
++                        top: self.size.input_py(),
++                        right: self.size.input_px(),
++                        bottom: self.size.input_py(),
++                        left: if state.presentation(cx).is_code_editor() {
++                            self.size.input_px().min(px(6.))
++                        } else {
++                            self.size.input_px()
++                        },
++                    }
++                } else {
++                    Edges::default()
+                 }
+-            } else {
+-                Edges::default()
+-            },
++            }),
+             cx,
+         );
+         state.set_disabled(self.disabled, cx);
+diff --git a/crates/component/src/input/textarea.rs b/crates/component/src/input/textarea.rs
+index c81ea809..d60ca003 100644
+--- a/crates/component/src/input/textarea.rs
++++ b/crates/component/src/input/textarea.rs
+@@ -1,8 +1,8 @@
+ use std::rc::Rc;
+ 
+ use gpui::{
+-    App, DefiniteLength, Entity, IntoElement, RenderOnce, SharedString, StyleRefinement, Styled,
+-    Window, prelude::FluentBuilder as _,
++    App, DefiniteLength, Edges, Entity, IntoElement, Pixels, RenderOnce, SharedString,
++    StyleRefinement, Styled, Window, prelude::FluentBuilder as _,
+ };
+ 
+ use super::{Input, TextareaState};
+@@ -19,6 +19,7 @@ pub struct Textarea {
+     style: StyleRefinement,
+     size: Size,
+     height: Option<DefiniteLength>,
++    content_padding: Option<Edges<Pixels>>,
+     appearance: bool,
+     bordered: bool,
+     disabled: bool,
+@@ -73,6 +74,7 @@ impl Textarea {
+             style: StyleRefinement::default(),
+             size: Size::default(),
+             height: None,
++            content_padding: None,
+             appearance: true,
+             bordered: true,
+             disabled: false,
+@@ -94,6 +96,13 @@ impl Textarea {
+         self
+     }
+ 
++    /// Override the text engine's internal inset. Frame padding set with
++    /// `Styled` remains separate; omitting this preserves the size-based inset.
++    pub fn content_padding(mut self, padding: Edges<Pixels>) -> Self {
++        self.content_padding = Some(padding);
++        self
++    }
++
+     pub fn appearance(mut self, appearance: bool) -> Self {
+         self.appearance = appearance;
+         self
+@@ -204,6 +213,9 @@ impl Textarea {
+             .role(self.role)
+             .with_size(self.size)
+             .when_some(self.height, |this, height| this.h(height))
++            .when_some(self.content_padding, |this, padding| {
++                this.content_padding(padding)
++            })
+             .when_some(self.accessibility_id, |this, id| this.accessibility_id(id))
+             .when_some(self.aria_label, |this, label| this.aria_label(label))
+             .when_some(self.context_menu_builder, |this, build| {
+diff --git a/crates/component/src/pagination.rs b/crates/component/src/pagination.rs
+index de7c8187..b875da67 100644
+--- a/crates/component/src/pagination.rs
++++ b/crates/component/src/pagination.rs
+@@ -40,6 +40,8 @@ pub struct Pagination {
+     id: ElementId,
+     style: StyleRefinement,
+     size: Size,
++    item_style: StyleRefinement,
++    content_style: Option<(StyleRefinement, Size)>,
+     current_page: usize,
+     total_pages: usize,
+     disabled: bool,
+@@ -55,6 +57,8 @@ impl Pagination {
+             id: id.into(),
+             style: StyleRefinement::default(),
+             size: Size::default(),
++            item_style: StyleRefinement::default(),
++            content_style: None,
+             current_page: 1,
+             total_pages: 1,
+             visible_pages: 5,
+@@ -64,6 +68,26 @@ impl Pagination {
+         }
+     }
+ 
++    /// Style every page and navigation button without changing pagination behavior.
++    pub fn item_style(mut self, style: StyleRefinement) -> Self {
++        self.item_style = style;
++        self
++    }
++
++    /// Style labels and icons independently from the item hit targets.
++    pub fn content_style(mut self, style: StyleRefinement, icon_size: Size) -> Self {
++        self.content_style = Some((style, icon_size));
++        self
++    }
++
++    fn style_button(&self, button: Button) -> Button {
++        button
++            .refine_style(&self.item_style)
++            .when_some(self.content_style.clone(), |button, (style, size)| {
++                button.content_style(style, size)
++            })
++    }
++
+     /// Set the current page number (1-based).
+     ///
+     /// The value will be clamped between 1 and total_pages when total_pages is set.
+@@ -131,6 +155,7 @@ impl Pagination {
+             .ghost()
+             .compact()
+             .with_size(self.size)
++            .map(|button| self.style_button(button))
+             .disabled(target_page.is_none())
+             .tooltip(label.clone())
+             .when(self.compact, |this| this.icon(icon.clone()))
+@@ -142,7 +167,12 @@ impl Pagination {
+                         .flex_nowrap()
+                         .when(is_prev, |this| this.flex_row_reverse())
+                         .child(SharedString::from(label))
+-                        .child(Icon::new(icon)),
++                        .child(
++                            Icon::new(icon)
++                                .when_some(self.content_style.as_ref(), |icon, (_, size)| {
++                                    icon.with_size(*size)
++                                }),
++                        ),
+                 )
+             })
+             .when_some(
+@@ -206,6 +236,7 @@ impl RenderOnce for Pagination {
+ 
+                         Button::new(page)
+                             .with_size(self.size)
++                            .map(|button| self.style_button(button))
+                             .map(|this| {
+                                 if is_selected {
+                                     this.outline()
+@@ -230,6 +261,7 @@ impl RenderOnce for Pagination {
+                     )))
+                     .ghost()
+                     .with_size(self.size)
++                    .map(|button| self.style_button(button))
+                     .compact()
+                     .disabled(self.disabled)
+                     .icon(IconName::Ellipsis)
+diff --git a/crates/component/src/switch.rs b/crates/component/src/switch.rs
+index db4b568e..ef3eeeb5 100644
+--- a/crates/component/src/switch.rs
++++ b/crates/component/src/switch.rs
+@@ -23,6 +23,8 @@ pub struct Switch {
+     label_side: Side,
+     on_click: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
+     size: Size,
++    track_size: Option<gpui::Size<gpui::Pixels>>,
++    label_size: Option<gpui::Pixels>,
+     color: Option<Hsla>,
+     tooltip: ComponentTooltip,
+     tab_stop: bool,
+@@ -44,6 +46,8 @@ impl Switch {
+             on_click: None,
+             label_side: Side::Right,
+             size: Size::Medium,
++            track_size: None,
++            label_size: None,
+             color: None,
+             tooltip: ComponentTooltip::default(),
+             tab_stop: true,
+@@ -58,6 +62,21 @@ impl Switch {
+         self
+     }
+ 
++    /// Set track geometry independently of the surrounding label/hit target.
++    pub fn track_size(mut self, size: gpui::Size<gpui::Pixels>) -> Self {
++        self.track_size = Some(gpui::size(
++            size.width.max(size.height).max(px(4.)),
++            size.height.max(px(4.)),
++        ));
++        self
++    }
++
++    /// Set the visible label size without changing the switch geometry.
++    pub fn label_size(mut self, size: gpui::Pixels) -> Self {
++        self.label_size = Some(size);
++        self
++    }
++
+     /// Set the label of the switch.
+     pub fn label(mut self, label: impl Into<Text>) -> Self {
+         self.label = Some(label.into());
+@@ -185,22 +204,33 @@ impl RenderOnce for Switch {
+         let unchecked_bg: Background = cx.theme().tokens.switch.into();
+         // GPUI's element opacity multiplies each primitive's alpha instead of
+         // compositing the subtree as one group, so fading the whole control
+-        // would let the track show through the thumb. Fading the track alone
+-        // lands on the pixels a grouped fade would: the thumb is `background`.
++        // would let the track show through the thumb. Fade the track and blend
++        // a solid thumb against the surface separately, keeping it opaque.
++        // A custom thumb (such as Newport's white thumb in dark mode) must
++        // fade too; it need not be the same color as the surface.
+         let disabled_bg = if checked { checked_bg } else { unchecked_bg }.opacity(0.5);
+         let toggle_bg: Background = cx.theme().tokens.switch_thumb.into();
++        let disabled_toggle_bg = toggle_bg
++            .as_solid()
++            .map(|color| Background::from(cx.theme().background.blend(color.opacity(0.5))))
++            .unwrap_or(toggle_bg);
+         let disabled_label_color = cx.theme().muted_foreground;
+ 
+-        let (bg_width, bg_height) = match self.size {
++        let (mut bg_width, mut bg_height) = match self.size {
+             Size::XSmall | Size::Small => (px(28.), px(16.)),
+             Size::Large => (px(44.), px(24.)),
+             _ => (px(36.), px(20.)),
+         };
+-        let bar_width = match self.size {
++        let mut bar_width = match self.size {
+             Size::XSmall | Size::Small => px(12.),
+             Size::Large => px(20.),
+             _ => px(16.),
+         };
++        if let Some(size) = self.track_size {
++            bg_width = size.width;
++            bg_height = size.height;
++            bar_width = bg_height - px(4.);
++        }
+         let inset = px(2.);
+         let radius = if cx.theme().radius >= px(4.) {
+             bg_height
+@@ -285,10 +315,14 @@ impl RenderOnce for Switch {
+                         .child(
+                             // Switch Toggle
+                             SwitchThumb::new(checked)
++                                .disabled(self.disabled)
+                                 .rounded(radius)
+                                 .size(bar_width)
+                                 .left(thumb_x)
+-                                .bg(toggle_bg),
++                                .bg(toggle_bg)
++                                .styles(|styles| {
++                                    styles.disabled(|style| style.bg(disabled_toggle_bg))
++                                }),
+                         ),
+                 )
+                 .when_some(self.label, |this, label| {
+@@ -303,7 +337,8 @@ impl RenderOnce for Switch {
+                             .map(|this| match self.size {
+                                 Size::Size(_) => this.input_text_size(Size::Medium),
+                                 size => this.input_text_size(size),
+-                            }),
++                            })
++                            .when_some(self.label_size, |this, size| this.text_size(size)),
+                     )
+                 }),
+         )
+@@ -604,4 +639,38 @@ mod tests {
+             .expect("the Switch label must participate in prepaint");
+         assert_eq!(bar.origin.y, label.origin.y);
+     }
++    #[gpui::test]
++    fn explicit_track_geometry_survives_font_scale_and_state(cx: &mut TestAppContext) {
++        struct CustomSwitch {
++            checked: bool,
++        }
++        impl Render for CustomSwitch {
++            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++                Switch::new("custom")
++                    .track_size(gpui::size(px(36.), px(22.)))
++                    .label_size(px(12.))
++                    .label("Live")
++                    .checked(self.checked)
++                    .disabled(self.checked)
++            }
++        }
++        cx.update(crate::init);
++        let (view, cx) = cx.add_window_view(|_, _| CustomSwitch { checked: false });
++        for rem in [14., 16.] {
++            for checked in [false, true] {
++                view.update(cx, |view, cx| {
++                    view.checked = checked;
++                    cx.notify();
++                });
++                cx.update(|window, cx| {
++                    window.set_rem_size(px(rem));
++                    window.draw(cx).clear(cx);
++                });
++                assert_eq!(
++                    cx.debug_bounds("switch-bar").unwrap().size,
++                    gpui::size(px(36.), px(22.))
++                );
++            }
++        }
++    }
+ }
+diff --git a/crates/component/src/tab/tab.rs b/crates/component/src/tab/tab.rs
+index 8891229e..c8dc4879 100644
+--- a/crates/component/src/tab/tab.rs
++++ b/crates/component/src/tab/tab.rs
+@@ -63,6 +63,7 @@ pub enum TabVariant {
+ impl TabVariant {
+     fn height(&self, size: Size) -> Pixels {
+         match size {
++            Size::Size(height) => height,
+             Size::XSmall => match self {
+                 TabVariant::Underline => px(26.),
+                 _ => px(20.),
+@@ -84,6 +85,13 @@ impl TabVariant {
+ 
+     pub(super) fn inner_height(&self, size: Size) -> Pixels {
+         match size {
++            Size::Size(height) => (height
++                - match self {
++                    TabVariant::Underline => px(6.),
++                    TabVariant::Segmented => px(8.),
++                    _ => px(2.),
++                })
++            .max(px(0.)),
+             Size::XSmall => match self {
+                 TabVariant::Tab | TabVariant::Outline | TabVariant::Pill => px(18.),
+                 TabVariant::Segmented | TabVariant::Folder => px(16.),
+@@ -131,6 +139,14 @@ impl TabVariant {
+ 
+     fn inner_margins(&self, size: Size) -> Edges<Pixels> {
+         match size {
++            Size::Size(_) => match self {
++                TabVariant::Underline => Edges {
++                    top: px(2.),
++                    bottom: px(3.),
++                    ..Default::default()
++                },
++                _ => Edges::all(px(0.)),
++            },
+             Size::XSmall => match self {
+                 TabVariant::Underline => Edges {
+                     top: px(1.),
+@@ -545,6 +561,7 @@ pub struct Tab {
+     children: Vec<AnyElement>,
+     variant: TabVariant,
+     size: Size,
++    pub(super) label_size: Option<Pixels>,
+     pub(super) disabled: bool,
+     pub(super) selected: bool,
+     pub(super) indicator_active: bool,
+@@ -613,6 +630,7 @@ impl Default for Tab {
+             suffix: None,
+             variant: TabVariant::default(),
+             size: Size::default(),
++            label_size: None,
+             max_width: None,
+             on_click: None,
+         }
+@@ -963,6 +981,7 @@ impl RenderOnce for Tab {
+                 Size::Large => this.text_base(),
+                 _ => this.text_sm(),
+             })
++            .when_some(self.label_size, |this, size| this.text_size(size))
+             .rounded(radius)
+             .when(folder, |this| {
+                 this.px(metrics.padding_x).pb(metrics.top_padding)
+diff --git a/crates/component/src/tab/tab_bar.rs b/crates/component/src/tab/tab_bar.rs
+index 62839712..f54663f5 100644
+--- a/crates/component/src/tab/tab_bar.rs
++++ b/crates/component/src/tab/tab_bar.rs
+@@ -58,6 +58,7 @@ pub struct TabBar {
+     selected_index: Option<usize>,
+     variant: TabVariant,
+     size: Size,
++    label_size: Option<Pixels>,
+     menu: bool,
+     max_width: Option<Pixels>,
+     on_click: Option<Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>>,
+@@ -77,6 +78,7 @@ impl TabBar {
+             suffix: None,
+             variant: TabVariant::default(),
+             size: Size::default(),
++            label_size: None,
+             last_empty_space: div().w_3().into_any_element(),
+             selected_index: None,
+             on_click: None,
+@@ -85,6 +87,12 @@ impl TabBar {
+         }
+     }
+ 
++    /// Set the label size for all tabs independently from their height.
++    pub fn label_size(mut self, size: Pixels) -> Self {
++        self.label_size = Some(size);
++        self
++    }
++
+     /// Set the Tab variant, all children will inherit the variant.
+     pub fn with_variant(mut self, variant: TabVariant) -> Self {
+         self.variant = variant;
+@@ -518,6 +526,7 @@ impl RenderOnce for TabBar {
+                 .max_width(max_width)
+                 .with_variant(self.variant)
+                 .with_size(self.size);
++            tab.label_size = self.label_size;
+             tab.indicator_active = has_indicator;
+             tab.indicator_ready = indicator_ready;
+             tab.indicator_epoch = indicator_epoch;

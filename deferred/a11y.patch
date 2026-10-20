@@ -1,0 +1,1746 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ruiyangke <me@ry.ke>
+Date: Tue, 20 Oct 2026 15:04:51 -0700
+Subject: [PATCH] a11y: Name controls and expose their states
+
+Deferred: not part of the series. Apply on top of it to restore the
+accessibility work from newport/compat-main.
+
+- Dialog::aria_label and AlertDialog::aria_label name the modal host.
+- Button::expanded exposes a disclosure state. Menu triggers expose Click,
+  their expanded state and HasPopup::Menu, and a loading trigger does not
+  open from the keyboard. Menu items mark their own node disabled.
+- Combobox::accessibility_label, with the selected titles as its value,
+  through new base Combobox setters.
+- ListDelegate::item_accessibility_label names list rows; searchable lists
+  use each item's title.
+- Switch::accessibility_description and TabBar::accessibility_label.
+- Pagination buttons, the editor search panel and notifications are named,
+  and search reports its match count as a status.
+---
+ crates/base/src/alert_dialog.rs               |   4 +
+ crates/base/src/combobox.rs                   |  24 +-
+ crates/base/src/dialog.rs                     |  15 +-
+ crates/component/locales/ui.yml               |  23 +
+ crates/component/src/button/button.rs         | 426 +++++++++++++-----
+ crates/component/src/combobox.rs              | 109 +++++
+ crates/component/src/dialog/alert_dialog.rs   |   6 +
+ crates/component/src/dialog/dialog.rs         |  45 ++
+ crates/component/src/input/search.rs          |  36 +-
+ crates/component/src/list/delegate.rs         |  11 +-
+ crates/component/src/list/list.rs             |  46 ++
+ crates/component/src/menu/dropdown_menu.rs    | 131 +++++-
+ crates/component/src/menu/menu_item.rs        | 113 ++++-
+ crates/component/src/notification.rs          |  51 +++
+ crates/component/src/pagination.rs            |   6 +
+ crates/component/src/popover.rs               |  11 +
+ .../component/src/searchable_list/adapter.rs  |   8 +-
+ crates/component/src/switch.rs                |  11 +
+ crates/component/src/tab/tab_bar.rs           |  39 ++
+ 19 files changed, 999 insertions(+), 116 deletions(-)
+
+diff --git a/crates/base/src/alert_dialog.rs b/crates/base/src/alert_dialog.rs
+index f85f51b9..f74fc8f4 100644
+--- a/crates/base/src/alert_dialog.rs
++++ b/crates/base/src/alert_dialog.rs
+@@ -223,6 +223,10 @@ impl AlertDialog {
+         self.0 = self.0.popup(element);
+         self
+     }
++    pub fn aria_label(mut self, label: impl Into<gpui::SharedString>) -> Self {
++        self.0 = self.0.aria_label(label);
++        self
++    }
+     pub fn close_on_escape(mut self, value: bool) -> Self {
+         self.0 = self.0.close_on_escape(value);
+         self
+diff --git a/crates/base/src/combobox.rs b/crates/base/src/combobox.rs
+index f72ae757..6153c51a 100644
+--- a/crates/base/src/combobox.rs
++++ b/crates/base/src/combobox.rs
+@@ -2,7 +2,7 @@ use std::rc::Rc;
+ 
+ use gpui::{
+     AnyElement, App, ElementId, FocusHandle, IntoElement, KeyBinding, ParentElement, RenderOnce,
+-    StyleRefinement, Styled, Window, prelude::FluentBuilder as _,
++    SharedString, StyleRefinement, Styled, Window, prelude::FluentBuilder as _,
+ };
+ 
+ use crate::{
+@@ -39,6 +39,8 @@ pub struct Combobox {
+     id: ElementId,
+     open: bool,
+     disabled: bool,
++    accessibility_label: Option<SharedString>,
++    accessibility_value: Option<SharedString>,
+     focus_handle: Option<FocusHandle>,
+     content_focus_handle: Option<FocusHandle>,
+     style: StyleRefinement,
+@@ -54,6 +56,8 @@ impl Combobox {
+             id: id.into(),
+             open: false,
+             disabled: false,
++            accessibility_label: None,
++            accessibility_value: None,
+             focus_handle: None,
+             content_focus_handle: None,
+             style: StyleRefinement::default(),
+@@ -107,6 +111,18 @@ impl Combobox {
+         self.on_dismiss = Some(Rc::new(handler));
+         self
+     }
++
++    /// Set the accessible name for the combobox.
++    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
++        self.accessibility_label = Some(label.into());
++        self
++    }
++
++    /// Set the accessible value, normally the selected item's title.
++    pub fn accessibility_value(mut self, value: impl Into<SharedString>) -> Self {
++        self.accessibility_value = Some(value.into());
++        self
++    }
+ }
+ 
+ impl Styled for Combobox {
+@@ -127,6 +143,12 @@ impl RenderOnce for Combobox {
+             .open(self.open)
+             .disabled(self.disabled)
+             .key_context(CONTEXT)
++            .when_some(self.accessibility_label, |this, label| {
++                this.accessibility_label(label)
++            })
++            .when_some(self.accessibility_value, |this, value| {
++                this.accessibility_value(value)
++            })
+             .when_some(self.focus_handle, |this, handle| this.focus_handle(&handle))
+             .when_some(self.content_focus_handle, |this, handle| {
+                 this.content_focus_handle(&handle)
+diff --git a/crates/base/src/dialog.rs b/crates/base/src/dialog.rs
+index 73ba641f..1be63a42 100644
+--- a/crates/base/src/dialog.rs
++++ b/crates/base/src/dialog.rs
+@@ -6,9 +6,9 @@ use std::{
+ 
+ use gpui::{
+     AnyElement, App, ClickEvent, FocusHandle, InteractiveElement as _, IntoElement, KeyBinding,
+-    MouseButton, ParentElement, Pixels, RenderOnce, Role, StatefulInteractiveElement as _,
+-    StyleRefinement, Styled, Window, anchored, deferred, div, point, prelude::FluentBuilder as _,
+-    px,
++    MouseButton, ParentElement, Pixels, RenderOnce, Role, SharedString,
++    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, anchored, deferred, div,
++    point, prelude::FluentBuilder as _, px,
+ };
+ use smallvec::SmallVec;
+ 
+@@ -125,6 +125,7 @@ pub struct Dialog {
+     style: StyleRefinement,
+     focus: FocusHandle,
+     role: Role,
++    aria_label: Option<SharedString>,
+     layer: usize,
+     keyboard: bool,
+     overlay_closable: bool,
+@@ -426,6 +427,7 @@ impl Dialog {
+             style: StyleRefinement::default(),
+             focus: cx.focus_handle(),
+             role: Role::Dialog,
++            aria_label: None,
+             layer: 0,
+             keyboard: true,
+             overlay_closable: true,
+@@ -486,6 +488,12 @@ impl Dialog {
+         self.dismiss_below_y = value;
+         self
+     }
++    /// Accessible name for the modal host, independent of visual title content.
++    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
++        self.aria_label = Some(label.into());
++        self
++    }
++
+     pub(crate) fn role(mut self, role: Role) -> Self {
+         self.role = role;
+         self
+@@ -561,6 +569,7 @@ impl RenderOnce for Dialog {
+                     .items_center()
+                     .justify_center()
+                     .role(self.role)
++                    .when_some(self.aria_label, |this, label| this.aria_label(label))
+                     .track_focus(&self.focus)
+                     .focus_trap(format!("dialog-{}", self.layer), &self.focus)
+                     .when(self.keyboard, |this| this.key_context(CONTEXT))
+diff --git a/crates/component/locales/ui.yml b/crates/component/locales/ui.yml
+index f1036dac..dc2c70a1 100644
+--- a/crates/component/locales/ui.yml
++++ b/crates/component/locales/ui.yml
+@@ -1,4 +1,7 @@
+ _version: 2
++Notification:
++  Dismiss:
++    en: Dismiss notification
+ Attachment:
+   Remove:
+     en: Remove
+@@ -276,6 +279,26 @@ List:
+     zh-TW: 搜尋...
+     it: Ricerca...
+ Input:
++  Find in text:
++    en: Find in text
++  Replace with:
++    en: Replace with
++  Match case:
++    en: Match case
++  Toggle replace:
++    en: Toggle replace
++  Previous match:
++    en: Previous match
++  Next match:
++    en: Next match
++  Close search:
++    en: Close search
++  Enter search text:
++    en: Enter search text
++  No matches:
++    en: No matches
++  Match count:
++    en: "Match %{current} of %{total}"
+   Decrement:
+     en: Decrement
+     zh-CN: 减少
+diff --git a/crates/component/src/button/button.rs b/crates/component/src/button/button.rs
+index 04acd8aa..e52a18c5 100644
+--- a/crates/component/src/button/button.rs
++++ b/crates/component/src/button/button.rs
+@@ -201,6 +201,7 @@ pub struct Button {
+     /// as it is open. Kept apart from `selected` because the two states mean
+     /// different things, even though they paint the same today.
+     open: bool,
++    menu_trigger: bool,
+     toggled: Option<bool>,
+     role: RoleOverride,
+     variant: ButtonVariant,
+@@ -253,6 +254,7 @@ impl Button {
+             disabled: false,
+             selected: false,
+             open: false,
++            menu_trigger: false,
+             toggled: None,
+             role: RoleOverride::default(),
+             variant: ButtonVariant::default(),
+@@ -397,6 +399,12 @@ impl Button {
+         self
+     }
+ 
++    /// Expose the state of a disclosure without changing selected or open styling.
++    pub fn expanded(mut self, expanded: bool) -> Self {
++        self.base = self.base.aria_expanded(expanded);
++        self
++    }
++
+     /// Set the icon of the button, if the Button have no label, the button well in Icon Button mode.
+     pub fn icon(mut self, icon: impl Into<ButtonIcon>) -> Self {
+         self.icon = Some(icon.into());
+@@ -470,6 +478,25 @@ impl Button {
+         self
+     }
+ 
++    /// The popover owns mouse-down and keyboard opening. A click listener on
++    /// its existing trigger also exposes AXPress through GPUI's mouse fallback;
++    /// the no-op cannot toggle the popover a second time on mouse-up.
++    pub(crate) fn menu_trigger(mut self, expanded: bool) -> Self {
++        self.menu_trigger = true;
++        self.base = self.base.aria_expanded(expanded);
++        // Append to the underlying listener list; don't replace a handler
++        // supplied through either this facade or `with_base`.
++        self.base.interactivity().on_click(|_, _, _| {});
++        if !self.interactive() {
++            // Popover opens on a Confirm action at key-down, before Button's
++            // normal loading click guard at key-up. Contain that action here.
++            self.base = self
++                .base
++                .on_action(|_: &gpui_base::actions::Confirm, _, cx| cx.stop_propagation());
++        }
++        self
++    }
++
+     /// Add hover handler, the bool parameter indicates whether the mouse is hovering.
+     pub fn on_hover(mut self, handler: impl Fn(&bool, &mut Window, &mut App) + 'static) -> Self {
+         self.on_hover = Some(Rc::new(handler));
+@@ -621,6 +648,7 @@ impl RenderOnce for Button {
+         let disabled = self.disabled;
+         let selected = self.shows_selected_style();
+         let loading = self.loading;
++        let menu_trigger = self.menu_trigger;
+         let tooltip_placement = self.tooltip_placement;
+         let tooltip_show_delay = self.tooltip_show_delay;
+         let hover_group = self.hover_group;
+@@ -801,116 +829,203 @@ impl RenderOnce for Button {
+                 this.when(has_content, |this| this.justify_between())
+                     .child(Caret::new(self.size).text_color(normal_style.fg.opacity(0.75)))
+             });
+-        root.role(self.role.resolve(|| {
+-            if self.variant.is_link() {
+-                Role::Link
+-            } else {
+-                Role::Button
+-            }
+-        }))
+-        .selected(selected)
+-        .disabled(disabled)
+-        // Base layers semantic states over the builder chain, so the caller's
+-        // own style is replayed inside each state to keep it the closest layer.
+-        .styles(|styles| {
+-            styles
+-                .selected(|style| {
+-                    style
+-                        .bg(selected_style.bg)
+-                        .border_color(selected_style.border)
+-                        .text_color(selected_style.fg)
+-                        .refine_style(&instance_style)
+-                })
+-                .disabled(|style| {
+-                    style
+-                        .bg(disabled_style.bg)
+-                        .text_color(disabled_style.fg)
+-                        .border_color(disabled_style.border)
+-                        .shadow_none()
+-                        .refine_style(&instance_style)
++        let root = root
++            .role(self.role.resolve(|| {
++                if self.variant.is_link() {
++                    Role::Link
++                } else {
++                    Role::Button
++                }
++            }))
++            .selected(selected)
++            .disabled(disabled)
++            // Base layers semantic states over the builder chain, so the caller's
++            // own style is replayed inside each state to keep it the closest layer.
++            .styles(|styles| {
++                styles
++                    .selected(|style| {
++                        style
++                            .bg(selected_style.bg)
++                            .border_color(selected_style.border)
++                            .text_color(selected_style.fg)
++                            .refine_style(&instance_style)
++                    })
++                    .disabled(|style| {
++                        style
++                            .bg(disabled_style.bg)
++                            .text_color(disabled_style.fg)
++                            .border_color(disabled_style.border)
++                            .shadow_none()
++                            .refine_style(&instance_style)
++                    })
++            })
++            .when_some(accessibility_label, |this, label| {
++                this.accessibility_label(label)
++            })
++            .when_some(self.toggled, |this, toggled| {
++                this.aria_toggled(if toggled {
++                    gpui::accesskit::Toggled::True
++                } else {
++                    gpui::accesskit::Toggled::False
+                 })
+-        })
+-        .when_some(accessibility_label, |this, label| {
+-            this.accessibility_label(label)
+-        })
+-        .when_some(self.toggled, |this, toggled| {
+-            this.aria_toggled(if toggled {
+-                gpui::accesskit::Toggled::True
+-            } else {
+-                gpui::accesskit::Toggled::False
+             })
+-        })
+-        .track_focus(&focus_handle)
+-        .tab_index(self.tab_index)
+-        .tab_stop(self.tab_stop)
+-        .child(content)
+-        // Fade the whole button while loading, so every variant is dimmed by
+-        // the same amount. Fading `bg`, `border` and `fg` one by one instead
+-        // only shows up on variants that have a background to begin with:
+-        // `Ghost`, `Link` and `Text` are transparent, so an alpha on their
+-        // background changes nothing.
+-        .when(loading && !disabled, |this| this.opacity(0.8))
+-        .when(!disabled, |this| {
+-            this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
+-                if loading {
+-                    cx.stop_propagation();
+-                    return;
+-                }
++            .track_focus(&focus_handle)
++            .tab_index(self.tab_index)
++            .tab_stop(self.tab_stop)
++            .child(content)
++            // Fade the whole button while loading, so every variant is dimmed by
++            // the same amount. Fading `bg`, `border` and `fg` one by one instead
++            // only shows up on variants that have a background to begin with:
++            // `Ghost`, `Link` and `Text` are transparent, so an alpha on their
++            // background changes nothing.
++            .when(loading && !disabled, |this| this.opacity(0.8))
++            .when(!disabled, |this| {
++                this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
++                    if loading {
++                        cx.stop_propagation();
++                        return;
++                    }
+ 
+-                // Avoid focus on mouse down.
+-                window.prevent_default();
++                    // Avoid focus on mouse down.
++                    window.prevent_default();
+ 
+-                // Pressing a button must not start the window-level text selection.
+-                crate::global_state::GlobalState::suppress_text_selection(cx);
++                    // Pressing a button must not start the window-level text selection.
++                    crate::global_state::GlobalState::suppress_text_selection(cx);
++                })
+             })
+-        })
+-        .when_some(self.on_click, |this, on_click| {
+-            this.on_click(move |event, window, cx| {
+-                if loading {
+-                    cx.stop_propagation();
+-                    return;
+-                }
++            .when_some(self.on_click, |this, on_click| {
++                this.on_click(move |event, window, cx| {
++                    if loading {
++                        cx.stop_propagation();
++                        return;
++                    }
+ 
+-                on_click(event, window, cx);
++                    on_click(event, window, cx);
++                })
+             })
+-        })
+-        .when(loading, |this| {
+-            this.on_click(|_, _, cx| cx.stop_propagation())
+-        })
+-        .when_some(self.on_hover.filter(|_| hoverable), |this, on_hover| {
+-            this.on_hover(move |hovered, window, cx| {
+-                on_hover(hovered, window, cx);
++            .when(loading, |this| {
++                this.on_click(|_, _, cx| cx.stop_propagation())
+             })
+-        })
+-        .map(|this| {
+-            if let Some(builder) = self.tooltip_builder {
+-                this.managed_tooltip_with(
+-                    tooltip_placement,
+-                    tooltip_show_delay,
+-                    move |window, cx| builder(window, cx),
+-                )
+-            } else if let Some((tooltip, action)) = self.tooltip {
+-                this.managed_tooltip_with(
+-                    tooltip_placement,
+-                    tooltip_show_delay,
+-                    move |window, cx| {
+-                        Tooltip::new(tooltip.clone())
+-                            .when_some(action.clone(), |this, (action, context)| {
+-                                this.action(
+-                                    action.boxed_clone().as_ref(),
+-                                    context.as_ref().map(|c| c.as_ref()),
+-                                )
+-                            })
+-                            .build(window, cx)
+-                    },
+-                )
+-            } else {
+-                this
+-            }
+-        })
+-        .when(is_focused && self.focus_ring_enabled, |this| {
+-            focus_style(this, focus_line, window, cx)
+-        })
++            .when_some(self.on_hover.filter(|_| hoverable), |this, on_hover| {
++                this.on_hover(move |hovered, window, cx| {
++                    on_hover(hovered, window, cx);
++                })
++            })
++            .map(|this| {
++                if let Some(builder) = self.tooltip_builder {
++                    this.managed_tooltip_with(
++                        tooltip_placement,
++                        tooltip_show_delay,
++                        move |window, cx| builder(window, cx),
++                    )
++                } else if let Some((tooltip, action)) = self.tooltip {
++                    this.managed_tooltip_with(
++                        tooltip_placement,
++                        tooltip_show_delay,
++                        move |window, cx| {
++                            Tooltip::new(tooltip.clone())
++                                .when_some(action.clone(), |this, (action, context)| {
++                                    this.action(
++                                        action.boxed_clone().as_ref(),
++                                        context.as_ref().map(|c| c.as_ref()),
++                                    )
++                                })
++                                .build(window, cx)
++                        },
++                    )
++                } else {
++                    this
++                }
++            })
++            .when(is_focused && self.focus_ring_enabled, |this| {
++                focus_style(this, focus_line, window, cx)
++            });
++        ButtonSemantics {
++            inner: root.render(window, cx).into_element(),
++            disabled: disabled || (menu_trigger && loading),
++            menu_trigger,
++        }
++    }
++}
++
++/// Amend the existing element, retaining its identity and interaction hooks.
++/// This adds no wrapping accessibility node or additional focus stop.
++struct ButtonSemantics<E: gpui::Element> {
++    inner: E,
++    disabled: bool,
++    menu_trigger: bool,
++}
++
++impl<E: gpui::Element> IntoElement for ButtonSemantics<E> {
++    type Element = Self;
++    fn into_element(self) -> Self {
++        self
++    }
++}
++
++impl<E: gpui::Element> gpui::Element for ButtonSemantics<E> {
++    type RequestLayoutState = E::RequestLayoutState;
++    type PrepaintState = E::PrepaintState;
++
++    fn id(&self) -> Option<ElementId> {
++        self.inner.id()
++    }
++    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
++        self.inner.source_location()
++    }
++    fn request_layout(
++        &mut self,
++        id: Option<&gpui::GlobalElementId>,
++        inspector: Option<&gpui::InspectorElementId>,
++        window: &mut Window,
++        cx: &mut App,
++    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
++        self.inner.request_layout(id, inspector, window, cx)
++    }
++    fn prepaint(
++        &mut self,
++        id: Option<&gpui::GlobalElementId>,
++        inspector: Option<&gpui::InspectorElementId>,
++        bounds: gpui::Bounds<Pixels>,
++        layout: &mut Self::RequestLayoutState,
++        window: &mut Window,
++        cx: &mut App,
++    ) -> Self::PrepaintState {
++        self.inner
++            .prepaint(id, inspector, bounds, layout, window, cx)
++    }
++    fn paint(
++        &mut self,
++        id: Option<&gpui::GlobalElementId>,
++        inspector: Option<&gpui::InspectorElementId>,
++        bounds: gpui::Bounds<Pixels>,
++        layout: &mut Self::RequestLayoutState,
++        prepaint: &mut Self::PrepaintState,
++        window: &mut Window,
++        cx: &mut App,
++    ) {
++        self.inner
++            .paint(id, inspector, bounds, layout, prepaint, window, cx)
++    }
++    fn a11y_role(&self) -> Option<Role> {
++        self.inner.a11y_role()
++    }
++    fn write_a11y_info(&self, node: &mut gpui::accesskit::Node) {
++        self.inner.write_a11y_info(node);
++        if self.disabled {
++            node.set_disabled();
++            node.remove_action(gpui::accesskit::Action::Click);
++        }
++        if self.menu_trigger {
++            node.set_has_popup(gpui::accesskit::HasPopup::Menu);
++        }
++    }
++    fn a11y_synthetic_children(
++        &mut self,
++        prepaint: &mut Self::PrepaintState,
++        builder: &mut gpui::A11ySubtreeBuilder,
++    ) {
++        self.inner.a11y_synthetic_children(prepaint, builder);
+     }
+ }
+ 
+@@ -1425,6 +1540,113 @@ mod tests {
+         );
+     }
+ 
++    #[gpui::test]
++    fn disclosure_state_forwards_to_the_base_accessibility_node(cx: &mut gpui::TestAppContext) {
++        use gpui::{Context, Element as _, Render, accesskit, canvas};
++        use std::sync::{Arc, Mutex};
++
++        struct Probe(Arc<Mutex<Vec<accesskit::Node>>>);
++        impl Render for Probe {
++            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++                let captured = self.0.clone();
++                canvas(
++                    move |_, window, cx| {
++                        let mut captured = captured.lock().unwrap();
++                        captured.clear();
++                        for button in [
++                            Button::new("ordinary"),
++                            Button::new("collapsed").expanded(false),
++                            Button::new("expanded").expanded(true),
++                        ] {
++                            let mut node = accesskit::Node::new(Role::Button);
++                            button
++                                .base
++                                .render(window, cx)
++                                .into_element()
++                                .write_a11y_info(&mut node);
++                            captured.push(node);
++                        }
++                    },
++                    |_, _, _, _| {},
++                )
++            }
++        }
++        let captured = Arc::new(Mutex::new(Vec::new()));
++        let result = captured.clone();
++        let (_, cx) = cx.add_window_view(move |_, _| Probe(captured));
++        cx.update(|window, cx| window.draw(cx).clear(cx));
++        let nodes = result.lock().unwrap();
++        assert_eq!(nodes[0].is_expanded(), None);
++        assert_eq!(nodes[1].is_expanded(), Some(false));
++        assert_eq!(nodes[2].is_expanded(), Some(true));
++    }
++
++    #[gpui::test]
++    fn menu_trigger_exposes_click_expansion_and_popup_on_its_existing_node(
++        cx: &mut gpui::TestAppContext,
++    ) {
++        use gpui::{Element as _, Render, accesskit, canvas};
++        use std::sync::{Arc, Mutex};
++
++        struct Probe(Arc<Mutex<Vec<accesskit::Node>>>);
++        impl Render for Probe {
++            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
++                let captured = self.0.clone();
++                canvas(
++                    move |_, window, cx| {
++                        let mut captured = captured.lock().unwrap();
++                        captured.clear();
++                        for (expanded, disabled, loading) in [
++                            (false, false, false),
++                            (true, false, false),
++                            (false, true, false),
++                            (false, false, true),
++                        ] {
++                            let element = Button::new("menu-trigger")
++                                .accessibility_label("More actions")
++                                .disabled(disabled)
++                                .loading(loading)
++                                .menu_trigger(expanded)
++                                .render(window, cx)
++                                .into_element();
++                            // These are the outer Element hooks consumed by
++                            // GPUI, including the semantic forwarding adapter.
++                            assert_eq!(element.id(), Some("menu-trigger".into()));
++                            assert_eq!(element.a11y_role(), Some(Role::Button));
++                            let mut node = accesskit::Node::new(Role::Button);
++                            element.write_a11y_info(&mut node);
++                            captured.push(node);
++                        }
++                    },
++                    |_, _, _, _| {},
++                )
++            }
++        }
++
++        cx.update(crate::init);
++        let captured = Arc::new(Mutex::new(Vec::new()));
++        let result = captured.clone();
++        let (_, cx) = cx.add_window_view(move |_, _| Probe(captured));
++        cx.update(|window, cx| window.draw(cx).clear(cx));
++        let nodes = result.lock().unwrap();
++        assert_eq!(nodes.len(), 4);
++        for (index, node) in nodes.iter().enumerate() {
++            assert_eq!(node.label(), Some("More actions"));
++            assert_eq!(node.has_popup(), Some(accesskit::HasPopup::Menu));
++            assert_eq!(node.is_expanded(), Some(index == 1));
++            assert_eq!(node.supports_action(accesskit::Action::Click), index < 2);
++            assert_eq!(node.is_disabled(), index >= 2);
++        }
++    }
++
++    #[test]
++    fn menu_trigger_preserves_an_existing_click_handler() {
++        let button = Button::new("menu-trigger").on_click(|_, _, _| {});
++        let handler = button.on_click.clone().unwrap();
++        let prepared = button.menu_trigger(false);
++        assert!(Rc::ptr_eq(&handler, prepared.on_click.as_ref().unwrap()));
++    }
++
+     #[gpui::test]
+     fn disabled_legacy_button_keeps_existing_pointer_blocking(cx: &mut gpui::TestAppContext) {
+         use std::{cell::Cell, rc::Rc};
+diff --git a/crates/component/src/combobox.rs b/crates/component/src/combobox.rs
+index 0a3cefb0..efcdfef1 100644
+--- a/crates/component/src/combobox.rs
++++ b/crates/component/src/combobox.rs
+@@ -71,6 +71,7 @@ pub type ComboboxChange = SearchableListChange;
+ // MARK: ComboboxOptions
+ 
+ struct ComboboxOptions {
++    accessibility_label: Option<SharedString>,
+     style: StyleRefinement,
+     size: Size,
+     cleanable: bool,
+@@ -88,6 +89,7 @@ struct ComboboxOptions {
+ impl Default for ComboboxOptions {
+     fn default() -> Self {
+         Self {
++            accessibility_label: None,
+             style: StyleRefinement::default(),
+             size: Size::default(),
+             cleanable: false,
+@@ -422,6 +424,16 @@ where
+         self.state.list.read(cx).query_input.read(cx).value()
+     }
+ 
++    fn accessibility_value(&self) -> SharedString {
++        self.state
++            .selection
++            .iter()
++            .map(|(_, item)| item.title().to_string())
++            .collect::<Vec<_>>()
++            .join(", ")
++            .into()
++    }
++
+     /// Dismiss for an application-owned transition without moving focus or
+     /// committing a selection. The caller can focus its destination afterward.
+     pub fn close(&mut self, cx: &mut Context<Self>) {
+@@ -816,6 +828,12 @@ where
+         }
+     }
+ 
++    /// Set the accessible name independently of the visible placeholder.
++    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
++        self.options.accessibility_label = Some(label.into());
++        self
++    }
++
+     /// Set the width of the dropdown menu.
+     pub fn menu_width(mut self, width: impl Into<Length>) -> Self {
+         self.options.menu_width = width.into();
+@@ -945,6 +963,8 @@ where
+ {
+     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+         let disabled = self.options.disabled;
++        let accessibility_label = self.options.accessibility_label.clone();
++        let accessibility_value = self.state.read(cx).accessibility_value();
+         let focus_handle = self.state.read(cx).state.focus_handle.clone();
+         let render_trigger = self.render_trigger;
+         let footer = self.footer;
+@@ -978,6 +998,10 @@ where
+         let confirm_state = self.state.clone();
+ 
+         BaseCombobox::new(self.id)
++            .when_some(accessibility_label, |this, label| {
++                this.accessibility_label(label)
++            })
++            .accessibility_value(accessibility_value)
+             .open(is_open)
+             .disabled(disabled)
+             .focus_handle(&focus_handle)
+@@ -1313,6 +1337,91 @@ mod tests {
+         assert_filtered_row_replacement(cx, true);
+     }
+ 
++    #[gpui::test]
++    fn accessible_value_tracks_selection_not_filtered_row(cx: &mut TestAppContext) {
++        cx.update(crate::init);
++        let cx = cx.add_empty_window();
++        cx.update(|window, cx| {
++            let state = cx.new(|cx| {
++                ComboboxState::new(
++                    SearchableVec::new(vec!["Rust", "Go"]),
++                    vec![IndexPath::new(0)],
++                    window,
++                    cx,
++                )
++                .searchable(true)
++            });
++            let control = Combobox::new(&state)
++                .placeholder("Pick language")
++                .accessibility_label("Language");
++            assert_eq!(
++                control.options.accessibility_label.as_deref(),
++                Some("Language")
++            );
++            assert_eq!(
++                control.options.placeholder.as_deref(),
++                Some("Pick language")
++            );
++            state.update(cx, |state, cx| {
++                assert_eq!(state.accessibility_value().as_ref(), "Rust");
++                state.set_query("Go", window, cx);
++                assert_eq!(state.accessibility_value().as_ref(), "Rust");
++                state.handle_item_select(IndexPath::new(0), window, cx);
++                assert_eq!(state.accessibility_value().as_ref(), "Go");
++                state.clear_selection(cx);
++                assert_eq!(state.accessibility_value().as_ref(), "");
++            });
++        });
++    }
++
++    #[gpui::test]
++    fn disabled_root_preserves_accessibility_identity_and_value(cx: &mut TestAppContext) {
++        use gpui::{Context, IntoElement, Render, Window};
++
++        struct Host {
++            state: Entity<ComboboxState<SearchableVec<&'static str>>>,
++            disabled: bool,
++        }
++        impl Render for Host {
++            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++                Combobox::new(&self.state)
++                    .accessibility_label("Language")
++                    .disabled(self.disabled)
++            }
++        }
++
++        cx.update(crate::init);
++        let (host, cx) = cx.add_window_view(|window, cx| Host {
++            state: cx.new(|cx| {
++                ComboboxState::new(
++                    SearchableVec::new(vec!["Rust", "Go"]),
++                    vec![IndexPath::new(0)],
++                    window,
++                    cx,
++                )
++            }),
++            disabled: true,
++        });
++        for disabled in [true, false] {
++            host.update(cx, |host, cx| {
++                host.disabled = disabled;
++                cx.notify();
++            });
++            cx.update(|window, cx| window.draw(cx).clear(cx));
++            cx.update(|window, _| {
++                let nodes = gpui_base::test_support::snapshots(window);
++                let node = nodes
++                    .iter()
++                    .find(|node| node.role() == Some(gpui::accesskit::Role::ComboBox))
++                    .expect("combobox node");
++                assert_eq!(node.disabled(), disabled.then_some(true));
++                assert_eq!(node.label(), Some("Language"));
++                assert_eq!(node.value(), Some("Rust"));
++                assert_eq!(node.expanded(), Some(false));
++            });
++        }
++    }
++
+     #[gpui::test]
+     fn close_preserves_selection_and_releases_popup_context(cx: &mut TestAppContext) {
+         cx.update(crate::init);
+diff --git a/crates/component/src/dialog/alert_dialog.rs b/crates/component/src/dialog/alert_dialog.rs
+index a96e56d3..e1f9c6f4 100644
+--- a/crates/component/src/dialog/alert_dialog.rs
++++ b/crates/component/src/dialog/alert_dialog.rs
+@@ -164,6 +164,12 @@ impl AlertDialog {
+         self
+     }
+ 
++    /// Sets the accessible name of the alert dialog independently of title layout.
++    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
++        self.base = self.base.aria_label(label);
++        self
++    }
++
+     /// Sets the title of the alert dialog.
+     #[track_caller]
+     pub fn title(mut self, title: impl IntoElement) -> Self {
+diff --git a/crates/component/src/dialog/dialog.rs b/crates/component/src/dialog/dialog.rs
+index 4e63936a..d4377851 100644
+--- a/crates/component/src/dialog/dialog.rs
++++ b/crates/component/src/dialog/dialog.rs
+@@ -202,6 +202,7 @@ type ContentBuilderFn = Rc<dyn Fn(DialogContent, &mut Window, &mut App) -> Dialo
+ 
+ #[derive(Clone)]
+ pub(crate) struct DialogProps {
++    aria_label: Option<SharedString>,
+     width: Pixels,
+     max_width: Option<Pixels>,
+     margin_top: Option<Pixels>,
+@@ -218,6 +219,7 @@ pub(crate) struct DialogProps {
+ impl Default for DialogProps {
+     fn default() -> Self {
+         Self {
++            aria_label: None,
+             margin_top: None,
+             centered: false,
+             width: px(448.),
+@@ -249,6 +251,9 @@ macro_rules! map_base_root {
+ }
+ 
+ impl BaseDialogRoot {
++    fn aria_label(self, label: SharedString) -> Self {
++        map_base_root!(self, aria_label(label))
++    }
+     fn layer(self, index: usize, topmost: bool) -> Self {
+         map_base_root!(self, layer(index, topmost))
+     }
+@@ -385,6 +390,13 @@ impl Dialog {
+         self
+     }
+ 
++    /// Sets the accessible name. Custom title elements cannot supply this
++    /// automatically; use the same text as the visible title.
++    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
++        self.props.aria_label = Some(label.into());
++        self
++    }
++
+     /// Sets the title of the dialog.
+     pub fn title(mut self, title: impl IntoElement) -> Self {
+         self.title = Some(title.into_any_element());
+@@ -720,6 +732,9 @@ impl RenderOnce for Dialog {
+                                     == WindowState::read(window, cx).active_dialogs.len(),
+                             )
+                             .focus_handle(self.focus_handle.clone())
++                            .when_some(self.props.aria_label.clone(), |root, label| {
++                                root.aria_label(label)
++                            })
+                             .close_on_escape(self.props.keyboard)
+                             .close_on_backdrop_press(self.props.overlay_closable)
+                             .dismiss_below_y(TITLE_BAR_HEIGHT)
+@@ -969,6 +984,36 @@ pub(crate) mod tests {
+             .unwrap_or_else(|| panic!("dialog layer {layer_ix} was not painted"))
+     }
+ 
++    #[cfg(feature = "test-support")]
++    #[gpui::test]
++    fn custom_titles_have_named_dialog_hosts_without_losing_roles(cx: &mut TestAppContext) {
++        let cx = window(cx, size(px(600.), px(500.)));
++        for (alert, role, name) in [
++            (false, gpui::Role::Dialog, "Edit forward"),
++            (true, gpui::Role::AlertDialog, "Delete forward?"),
++        ] {
++            open(cx, move |dialog, _, cx| {
++                dialog
++                    .when(alert, |dialog| {
++                        dialog.with_base_alert_dialog(gpui_base::AlertDialog::new(cx))
++                    })
++                    .aria_label(name)
++                    .title(div().child(name))
++                    .child("Body")
++            });
++            cx.update(|window, _| {
++                let nodes = gpui_base::test_support::snapshots(window);
++                let host = nodes
++                    .iter()
++                    .find(|node| node.role() == Some(role))
++                    .expect("semantic dialog host");
++                assert_eq!(host.label(), Some(name));
++            });
++            cx.update(|window, cx| window.close_dialog(cx));
++            cx.run_until_parked();
++        }
++    }
++
+     /// The clamp must not touch a dialog that already fits: the default width
+     /// and the tenth-of-the-viewport top offset are the documented contract.
+     #[gpui::test]
+diff --git a/crates/component/src/input/search.rs b/crates/component/src/input/search.rs
+index 4b14f56f..56e89397 100644
+--- a/crates/component/src/input/search.rs
++++ b/crates/component/src/input/search.rs
+@@ -1,11 +1,13 @@
++use gpui_base::TestSupportExt as _;
+ use ropey::Rope;
+ use rust_i18n::t;
+ use std::ops::Range;
+ 
+ use gpui::{
+     App, AppContext as _, Context, Empty, Entity, FocusHandle, Focusable, Half,
+-    InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render, Styled, Subscription,
+-    WeakEntity, Window, actions, div, prelude::FluentBuilder as _,
++    InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render,
++    StatefulInteractiveElement as _, Styled, Subscription, WeakEntity, Window, actions, div,
++    prelude::FluentBuilder as _,
+ };
+ 
+ use crate::{
+@@ -356,9 +358,12 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
+                             .gap_1()
+                             .child(
+                                 Input::new(&self.search_input)
++                                    .aria_label(t!("Input.Find in text"))
+                                     .focus_bordered(false)
+                                     .suffix(
+                                         Button::new("case-insensitive")
++                                            .accessibility_label(t!("Input.Match case"))
++                                            .tooltip(t!("Input.Match case"))
+                                             .selected(!self.session.case_insensitive)
+                                             .toggled(!self.session.case_insensitive)
+                                             .xsmall()
+@@ -386,6 +391,8 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
+                     .when(allow_replace, |this| {
+                         this.child(
+                             Button::new("replace-mode")
++                                .accessibility_label(t!("Input.Toggle replace"))
++                                .tooltip(t!("Input.Toggle replace"))
+                                 .xsmall()
+                                 .ghost()
+                                 .icon(IconName::Replace)
+@@ -398,6 +405,8 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
+                     })
+                     .child(
+                         Button::new("prev")
++                            .accessibility_label(t!("Input.Previous match"))
++                            .tooltip(t!("Input.Previous match"))
+                             .xsmall()
+                             .ghost()
+                             .icon(IconName::ChevronLeft)
+@@ -408,6 +417,8 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
+                     )
+                     .child(
+                         Button::new("next")
++                            .accessibility_label(t!("Input.Next match"))
++                            .tooltip(t!("Input.Next match"))
+                             .xsmall()
+                             .ghost()
+                             .icon(IconName::ChevronRight)
+@@ -417,7 +428,23 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
+                             })),
+                     )
+                     .child(
+-                        Label::new(self.session.matcher.label())
++                        div()
++                            .id("search-result-count")
++                            .role(gpui::accesskit::Role::Status)
++                            .aria_label(if has_matches {
++                                t!(
++                                    "Input.Match count",
++                                    current = self.session.matcher.current_match_index() + 1,
++                                    total = self.session.matcher.len()
++                                )
++                                .into_owned()
++                            } else if self.query(cx).len() == 0 {
++                                t!("Input.Enter search text").into_owned()
++                            } else {
++                                t!("Input.No matches").into_owned()
++                            })
++                            .test_support()
++                            .child(Label::new(self.session.matcher.label()))
+                             .when(!has_matches, |this| {
+                                 this.text_color(cx.theme().muted_foreground)
+                             })
+@@ -427,6 +454,8 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
+                     .child(div().w_7())
+                     .child(
+                         Button::new("close")
++                            .accessibility_label(t!("Input.Close search"))
++                            .tooltip(t!("Input.Close search"))
+                             .xsmall()
+                             .ghost()
+                             .icon(IconName::Close)
+@@ -442,6 +471,7 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
+                         .gap_2()
+                         .child(
+                             Input::new(&self.replace_input)
++                                .aria_label(t!("Input.Replace with"))
+                                 .focus_bordered(false)
+                                 .small()
+                                 .w(self.input_width)
+diff --git a/crates/component/src/list/delegate.rs b/crates/component/src/list/delegate.rs
+index 81e3d49a..8249d734 100644
+--- a/crates/component/src/list/delegate.rs
++++ b/crates/component/src/list/delegate.rs
+@@ -1,4 +1,7 @@
+-use gpui::{AnyElement, App, Context, IntoElement, ParentElement as _, Styled as _, Task, Window};
++use gpui::{
++    AnyElement, App, Context, IntoElement, ParentElement as _, SharedString, Styled as _, Task,
++    Window,
++};
+ 
+ use crate::{
+     ActiveTheme as _, Icon, IconName, IndexPath, Selectable, h_flex,
+@@ -34,6 +37,12 @@ pub trait ListDelegate: Sized + 'static {
+     /// the section header and footer will also be skipped.
+     fn items_count(&self, section: usize, cx: &App) -> usize;
+ 
++    /// Accessible name for the existing row host. Visual children do not
++    /// automatically become a ListItem's accessible name.
++    fn item_accessibility_label(&self, ix: IndexPath, cx: &App) -> Option<SharedString> {
++        None
++    }
++
+     /// Render the item at the given index.
+     ///
+     /// Return None will skip the item.
+diff --git a/crates/component/src/list/list.rs b/crates/component/src/list/list.rs
+index b8611358..2928470c 100644
+--- a/crates/component/src/list/list.rs
++++ b/crates/component/src/list/list.rs
+@@ -491,11 +491,13 @@ where
+         let id = SharedString::from(format!("list-item-{}", ix));
+ 
+         let total_items = self.rows_cache.items_count();
++        let accessibility_label = self.delegate.item_accessibility_label(ix, cx);
+ 
+         div()
+             .id(id)
+             .test_support()
+             .role(Role::ListItem)
++            .when_some(accessibility_label, |this, label| this.aria_label(label))
+             .aria_position_in_set(ix.row + 1)
+             .aria_size_of_set(total_items)
+             .aria_selected(selected)
+@@ -970,4 +972,48 @@ mod measurement_tests {
+             },
+         );
+     }
++
++    #[gpui::test]
++    fn searchable_rows_name_the_native_list_item_host_after_filtering(cx: &mut TestAppContext) {
++        use crate::searchable_list::{SearchableVec, adapter::SearchableListAdapter};
++
++        cx.update(crate::init);
++        let window = cx.add_empty_window();
++        window.draw(
++            gpui::point(px(0.), px(0.)),
++            size(px(300.), px(300.)),
++            |window, cx| {
++                let list = cx.new(|cx| {
++                    ListState::new(
++                        SearchableListAdapter::new(
++                            SearchableVec::new(vec!["SSH agent", "Private key"]),
++                            |_, _, _, _| {},
++                            |_, _, _| {},
++                            |_, _| div().into_any_element(),
++                        ),
++                        window,
++                        cx,
++                    )
++                });
++                list.update(cx, |list, cx| {
++                    // Inspect the outer row hooks used by GPUI, not the inner
++                    // visual title. A filtered row index now identifies a
++                    // different item and must expose its updated name.
++                    for labels in [vec!["SSH agent", "Private key"], vec!["Private key"]] {
++                        list.delegate.delegate = SearchableVec::new(labels.clone());
++                        for (index, name) in labels.into_iter().enumerate() {
++                            let row = list
++                                .render_list_item(IndexPath::new(index), window, cx)
++                                .into_element();
++                            assert_eq!(row.a11y_role(), Some(Role::ListItem));
++                            let mut node = gpui::accesskit::Node::new(Role::ListItem);
++                            row.write_a11y_info(&mut node);
++                            assert_eq!(node.label(), Some(name));
++                        }
++                    }
++                });
++                div()
++            },
++        );
++    }
+ }
+diff --git a/crates/component/src/menu/dropdown_menu.rs b/crates/component/src/menu/dropdown_menu.rs
+index 0600d7a4..395832bd 100644
+--- a/crates/component/src/menu/dropdown_menu.rs
++++ b/crates/component/src/menu/dropdown_menu.rs
+@@ -17,6 +17,12 @@ pub trait DropdownMenu: Styled + Selectable + InteractiveElement + IntoElement +
+         self.track_focus(handle)
+     }
+ 
++    /// Amend an existing semantic trigger without adding a wrapper control.
++    #[doc(hidden)]
++    fn prepare_menu_trigger(self, _expanded: bool) -> Self {
++        self
++    }
++
+     /// Create a dropdown menu with the given items, anchored to the TopLeft corner
+     fn dropdown_menu(
+         self,
+@@ -38,6 +44,7 @@ pub trait DropdownMenu: Styled + Selectable + InteractiveElement + IntoElement +
+             anchor,
+             self,
+             Self::track_menu_focus,
++            Self::prepare_menu_trigger,
+             f,
+         )
+     }
+@@ -47,6 +54,9 @@ impl DropdownMenu for Button {
+     fn track_menu_focus(self, handle: &FocusHandle) -> Self {
+         self.track_focus(handle)
+     }
++    fn prepare_menu_trigger(self, expanded: bool) -> Self {
++        self.menu_trigger(expanded)
++    }
+ }
+ 
+ #[derive(IntoElement)]
+@@ -55,6 +65,7 @@ pub struct DropdownMenuPopover<T: Selectable + IntoElement + 'static> {
+     anchor: Anchor,
+     trigger: T,
+     track_trigger_focus: fn(T, &FocusHandle) -> T,
++    prepare_trigger: fn(T, bool) -> T,
+     builder: Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>,
+     on_open_change: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
+     open: Option<bool>,
+@@ -69,6 +80,7 @@ where
+         anchor: impl Into<Anchor>,
+         trigger: T,
+         track_trigger_focus: fn(T, &FocusHandle) -> T,
++        prepare_trigger: fn(T, bool) -> T,
+         builder: impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
+     ) -> Self {
+         Self {
+@@ -76,6 +88,7 @@ where
+             anchor: anchor.into(),
+             trigger,
+             track_trigger_focus,
++            prepare_trigger,
+             builder: Rc::new(builder),
+             on_open_change: None,
+             open: None,
+@@ -141,11 +154,15 @@ where
+             menu_state.update(cx, |state, _| state.menu = None);
+         }
+         let trigger = (self.track_trigger_focus)(self.trigger, &trigger_focus);
++        let prepare_trigger = self.prepare_trigger;
+ 
+         Popover::new(SharedString::from(format!("popover:{}", self.id)))
+             .appearance(false)
+             .overlay_closable(false)
+-            .trigger(trigger)
++            .trigger_with(move |expanded, _, _| {
++                let open = trigger.is_open();
++                prepare_trigger(trigger.open(open || expanded), expanded).into_any_element()
++            })
+             .anchor(self.anchor)
+             .when_some(self.open, |popover, open| popover.open(open))
+             .when_some(self.on_open_change, |this, callback| {
+@@ -619,6 +636,118 @@ mod tests {
+     }
+ 
+     #[cfg(feature = "test-support")]
++    struct AccessibleMenuRoot {
++        disabled: bool,
++        loading: bool,
++        changes: Rc<RefCell<Vec<bool>>>,
++    }
++
++    #[cfg(feature = "test-support")]
++    impl Render for AccessibleMenuRoot {
++        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++            use crate::Disableable as _;
++            let changes = self.changes.clone();
++            div().size_full().child(
++                Button::new("accessible-menu-trigger")
++                    .accessibility_label("More actions")
++                    .label("More")
++                    .disabled(self.disabled)
++                    .loading(self.loading)
++                    .w(px(100.))
++                    .h(px(30.))
++                    .dropdown_menu(|menu, _, _| menu.menu("Copy", Box::new(CopyText)))
++                    .on_open_change(move |open, _, _| changes.borrow_mut().push(*open)),
++            )
++        }
++    }
++
++    /// GPUI's OS action dispatcher is crate-private. Its Click fallback is
++    /// exactly a left down/up at the advertised node's center; exercise that
++    /// route here alongside the trigger's rendered expanded state. The Button
++    /// regression separately checks its actual Element accessibility hooks.
++    /// This is not an OS AXPress integration test.
++    #[cfg(feature = "test-support")]
++    #[gpui::test]
++    fn accessible_click_fallback_opens_once_and_respects_disabled_and_loading(
++        cx: &mut TestAppContext,
++    ) {
++        use gpui::{MouseDownEvent, MouseUpEvent, PlatformInput};
++        cx.update(crate::init);
++        for (disabled, loading) in [(false, false), (true, false), (false, true)] {
++            let changes = Rc::new(RefCell::new(Vec::new()));
++            let (_, cx) = cx.add_window_view({
++                let changes = changes.clone();
++                move |_, _| AccessibleMenuRoot {
++                    disabled,
++                    loading,
++                    changes,
++                }
++            });
++            cx.update(|window, cx| window.draw(cx).clear(cx));
++            let trigger = cx.update(|window, _| {
++                let triggers: Vec<_> = gpui_base::test_support::snapshots(window)
++                    .into_iter()
++                    .filter(|node| node.label() == Some("More actions"))
++                    .collect();
++                assert_eq!(triggers.len(), 1, "one existing trigger, no nested button");
++                let trigger = triggers.into_iter().next().unwrap();
++                assert_eq!(trigger.role(), Some(gpui::Role::Button));
++                assert_eq!(trigger.expanded(), Some(false));
++                trigger
++            });
++            let position = trigger.bounds().center();
++            cx.update(|window, cx| {
++                window.dispatch_event(
++                    PlatformInput::MouseDown(MouseDownEvent {
++                        button: MouseButton::Left,
++                        position,
++                        modifiers: Default::default(),
++                        click_count: 1,
++                        first_mouse: false,
++                    }),
++                    cx,
++                );
++                window.dispatch_event(
++                    PlatformInput::MouseUp(MouseUpEvent {
++                        button: MouseButton::Left,
++                        position,
++                        modifiers: Default::default(),
++                        click_count: 1,
++                    }),
++                    cx,
++                );
++                window.draw(cx).clear(cx);
++            });
++            let enabled = !disabled && !loading;
++            assert_eq!(&*changes.borrow(), if enabled { &[true][..] } else { &[] });
++            cx.update(|window, _| {
++                let trigger = gpui_base::test_support::snapshots(window)
++                    .into_iter()
++                    .find(|node| node.label() == Some("More actions"))
++                    .unwrap();
++                assert_eq!(trigger.expanded(), Some(enabled));
++            });
++            if enabled {
++                cx.simulate_keystrokes("escape");
++                cx.update(|window, cx| window.draw(cx).clear(cx));
++                assert_eq!(&*changes.borrow(), &[true, false]);
++                for key in ["enter", "space"] {
++                    changes.borrow_mut().clear();
++                    cx.simulate_keystrokes(key);
++                    cx.update(|window, cx| window.draw(cx).clear(cx));
++                    assert_eq!(&*changes.borrow(), &[true], "{key} opens once");
++                    cx.simulate_keystrokes("escape");
++                    cx.update(|window, cx| window.draw(cx).clear(cx));
++                    assert_eq!(&*changes.borrow(), &[true, false]);
++                }
++            } else {
++                cx.update(|window, cx| window.focus_next(cx));
++                cx.simulate_keystrokes("enter space");
++                assert!(changes.borrow().is_empty());
++            }
++        }
++    }
++
+     impl Render for MenuProbeRoot {
+         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+             let slot = self.menu.clone();
+diff --git a/crates/component/src/menu/menu_item.rs b/crates/component/src/menu/menu_item.rs
+index bea28d98..853ddac8 100644
+--- a/crates/component/src/menu/menu_item.rs
++++ b/crates/component/src/menu/menu_item.rs
+@@ -91,9 +91,8 @@ impl ParentElement for MenuItemElement {
+ 
+ impl RenderOnce for MenuItemElement {
+     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+-        h_flex()
++        let root = h_flex()
+             .id(self.id)
+-            .test_support()
+             .role(Role::MenuItem)
+             .when_some(self.aria_label, |this, label| this.aria_label(label))
+             .aria_selected(self.selected)
+@@ -131,7 +130,91 @@ impl RenderOnce for MenuItemElement {
+             .when(self.disabled, |this| {
+                 this.text_color(cx.theme().muted_foreground)
+             })
+-            .children(self.children)
++            .children(self.children);
++        MenuItemSemantics {
++            inner: root,
++            disabled: self.disabled,
++        }
++        .test_support()
++    }
++}
++
++/// Amend this item's existing accessibility node without introducing a wrapper
++/// node or another focus stop, matching the Button semantics adapter.
++struct MenuItemSemantics<E: gpui::Element> {
++    inner: E,
++    disabled: bool,
++}
++impl<E: gpui::Element + InteractiveElement> InteractiveElement for MenuItemSemantics<E> {
++    fn interactivity(&mut self) -> &mut gpui::Interactivity {
++        self.inner.interactivity()
++    }
++}
++impl<E: gpui::Element> IntoElement for MenuItemSemantics<E> {
++    type Element = Self;
++    fn into_element(self) -> Self {
++        self
++    }
++}
++impl<E: gpui::Element> gpui::Element for MenuItemSemantics<E> {
++    type RequestLayoutState = E::RequestLayoutState;
++    type PrepaintState = E::PrepaintState;
++    fn id(&self) -> Option<ElementId> {
++        self.inner.id()
++    }
++    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
++        self.inner.source_location()
++    }
++    fn request_layout(
++        &mut self,
++        id: Option<&gpui::GlobalElementId>,
++        inspector: Option<&gpui::InspectorElementId>,
++        window: &mut Window,
++        cx: &mut App,
++    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
++        self.inner.request_layout(id, inspector, window, cx)
++    }
++    fn prepaint(
++        &mut self,
++        id: Option<&gpui::GlobalElementId>,
++        inspector: Option<&gpui::InspectorElementId>,
++        bounds: gpui::Bounds<gpui::Pixels>,
++        layout: &mut Self::RequestLayoutState,
++        window: &mut Window,
++        cx: &mut App,
++    ) -> Self::PrepaintState {
++        self.inner
++            .prepaint(id, inspector, bounds, layout, window, cx)
++    }
++    fn paint(
++        &mut self,
++        id: Option<&gpui::GlobalElementId>,
++        inspector: Option<&gpui::InspectorElementId>,
++        bounds: gpui::Bounds<gpui::Pixels>,
++        layout: &mut Self::RequestLayoutState,
++        prepaint: &mut Self::PrepaintState,
++        window: &mut Window,
++        cx: &mut App,
++    ) {
++        self.inner
++            .paint(id, inspector, bounds, layout, prepaint, window, cx)
++    }
++    fn a11y_role(&self) -> Option<Role> {
++        self.inner.a11y_role()
++    }
++    fn write_a11y_info(&self, node: &mut gpui::accesskit::Node) {
++        self.inner.write_a11y_info(node);
++        if self.disabled {
++            node.set_disabled();
++            node.remove_action(gpui::accesskit::Action::Click);
++        }
++    }
++    fn a11y_synthetic_children(
++        &mut self,
++        prepaint: &mut Self::PrepaintState,
++        builder: &mut gpui::A11ySubtreeBuilder,
++    ) {
++        self.inner.a11y_synthetic_children(prepaint, builder);
+     }
+ }
+ 
+@@ -139,6 +222,30 @@ impl RenderOnce for MenuItemElement {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn disabled_semantics_amend_the_existing_menu_item() {
++        use gpui::Element;
++        for disabled in [false, true] {
++            let item = MenuItemSemantics {
++                inner: gpui::div()
++                    .id("item")
++                    .role(Role::MenuItem)
++                    .aria_label("Recreate"),
++                disabled,
++            };
++            let mut node = gpui::accesskit::Node::new(Role::MenuItem);
++            node.add_action(gpui::accesskit::Action::Click);
++            item.write_a11y_info(&mut node);
++            assert_eq!(item.a11y_role(), Some(Role::MenuItem));
++            assert_eq!(node.label(), Some("Recreate"));
++            assert_eq!(node.is_disabled(), disabled);
++            assert_eq!(
++                node.supports_action(gpui::accesskit::Action::Click),
++                !disabled
++            );
++        }
++    }
++
+     #[gpui::test]
+     fn aria_label_sets_accessible_name(_cx: &mut gpui::TestAppContext) {
+         let item = MenuItemElement::new("open").aria_label("Open");
+diff --git a/crates/component/src/notification.rs b/crates/component/src/notification.rs
+index 7eb5764e..33ff763b 100644
+--- a/crates/component/src/notification.rs
++++ b/crates/component/src/notification.rs
+@@ -418,8 +418,16 @@ impl Render for Notification {
+         };
+         let has_icon = icon.is_some();
+         let placement = self.placement.unwrap_or(cx.theme().notification.placement);
++        // Plain child text is not automatically named in GPUI's AX tree. Keep
++        // custom content semantics intact when no built-in text was supplied.
++        let accessible_label = match (&self.title, &self.message) {
++            (Some(title), Some(message)) => Some(format!("{title}\n{message}")),
++            (Some(text), None) | (None, Some(text)) => Some(text.to_string()),
++            (None, None) => None,
++        };
+ 
+         BaseToast::new("notification")
++            .when_some(accessible_label, |toast, label| toast.aria_label(label))
+             .transition_status(transition_status)
+             .h_flex()
+             .group("")
+@@ -461,6 +469,7 @@ impl Render for Notification {
+                     .group_hover("", |this| this.visible())
+                     .child(
+                         Button::new("close")
++                            .accessibility_label(rust_i18n::t!("Notification.Dismiss"))
+                             .icon(IconName::Close)
+                             .ghost()
+                             .xsmall()
+@@ -1082,6 +1091,48 @@ mod tests {
+     struct FooKind;
+     struct BarKind;
+ 
++    #[cfg(feature = "test-support")]
++    #[gpui::test]
++    fn notification_exposes_its_text_and_named_dismiss_control(cx: &mut TestAppContext) {
++        cx.update(|cx| cx.set_global(Theme::default()));
++        let (note, cx) = cx.add_window_view(|_, _| {
++            let mut note = Notification::error("The remote file already exists.")
++                .title("Upload failed")
++                .autohide(false);
++            note.transition_status = ToastTransitionStatus::Present;
++            note
++        });
++        cx.update(|window, cx| window.draw(cx).clear(cx));
++        cx.update(|window, _| {
++            let nodes = gpui_base::test_support::snapshots(window);
++            assert!(nodes.iter().any(|node| {
++                node.role() == Some(gpui::accesskit::Role::Alert)
++                    && node.label() == Some("Upload failed\nThe remote file already exists.")
++            }));
++            assert!(nodes.iter().any(|node| {
++                node.role() == Some(gpui::accesskit::Role::Button)
++                    && node.label() == Some("Dismiss notification")
++            }));
++        });
++        note.update(cx, |note, cx| {
++            note.title = None;
++            note.message = Some("File downloaded.".into());
++            cx.notify();
++        });
++        cx.update(|window, cx| window.draw(cx).clear(cx));
++        cx.update(|window, _| {
++            let nodes = gpui_base::test_support::snapshots(window);
++            assert!(nodes.iter().any(|node| {
++                node.role() == Some(gpui::accesskit::Role::Alert)
++                    && node.label() == Some("File downloaded.")
++            }));
++            assert!(!nodes.iter().any(|node| {
++                node.label()
++                    .is_some_and(|label| label.contains("Upload failed"))
++            }));
++        });
++    }
++
+     struct TestRoot {
+         list: Entity<NotificationList>,
+         other_focus: FocusHandle,
+diff --git a/crates/component/src/pagination.rs b/crates/component/src/pagination.rs
+index b875da67..55c7a2f4 100644
+--- a/crates/component/src/pagination.rs
++++ b/crates/component/src/pagination.rs
+@@ -152,6 +152,7 @@ impl Pagination {
+         };
+ 
+         Button::new(id)
++            .accessibility_label(label.clone())
+             .ghost()
+             .compact()
+             .with_size(self.size)
+@@ -259,6 +260,11 @@ impl RenderOnce for Pagination {
+                         "ellipsis-{}-{}",
+                         range.start, range.end
+                     )))
++                    .accessibility_label(format!(
++                        "Choose page {} through {}",
++                        range.start,
++                        range.end.saturating_sub(1)
++                    ))
+                     .ghost()
+                     .with_size(self.size)
+                     .map(|button| self.style_button(button))
+diff --git a/crates/component/src/popover.rs b/crates/component/src/popover.rs
+index f36b3056..9b1fae21 100644
+--- a/crates/component/src/popover.rs
++++ b/crates/component/src/popover.rs
+@@ -197,6 +197,17 @@ impl Popover {
+         self
+     }
+ 
++    /// Build a composite trigger with its actual expanded state before erasing
++    /// its type, so menu adapters can amend the existing control's semantics.
++    #[doc(hidden)]
++    pub(crate) fn trigger_with(
++        mut self,
++        trigger: impl FnOnce(bool, &Window, &App) -> AnyElement + 'static,
++    ) -> Self {
++        self.trigger = Some(Box::new(trigger));
++        self
++    }
++
+     /// Set the default open state of the popover, default is `false`.
+     ///
+     /// This is only used to initialize the open state of the popover.
+diff --git a/crates/component/src/searchable_list/adapter.rs b/crates/component/src/searchable_list/adapter.rs
+index ff477f37..9a24be1e 100644
+--- a/crates/component/src/searchable_list/adapter.rs
++++ b/crates/component/src/searchable_list/adapter.rs
+@@ -1,6 +1,6 @@
+ use gpui::{
+-    AnyElement, App, Context, IntoElement, ParentElement as _, Pixels, Styled as _, Window, div,
+-    prelude::FluentBuilder as _,
++    AnyElement, App, Context, IntoElement, ParentElement as _, Pixels, SharedString, Styled as _,
++    Window, div, prelude::FluentBuilder as _,
+ };
+ 
+ use crate::{
+@@ -77,6 +77,10 @@ impl<D: SearchableListDelegate + 'static> ListDelegate for SearchableListAdapter
+         self.delegate.items_count(section)
+     }
+ 
++    fn item_accessibility_label(&self, ix: IndexPath, _: &App) -> Option<SharedString> {
++        self.delegate.item(ix).map(|item| item.title())
++    }
++
+     fn render_section_header(
+         &mut self,
+         section: usize,
+diff --git a/crates/component/src/switch.rs b/crates/component/src/switch.rs
+index ef3eeeb5..135388f6 100644
+--- a/crates/component/src/switch.rs
++++ b/crates/component/src/switch.rs
+@@ -20,6 +20,7 @@ pub struct Switch {
+     label: Option<Text>,
+     /// The announced name, when the visible label is not it.
+     accessibility_label: Option<SharedString>,
++    accessibility_description: Option<SharedString>,
+     label_side: Side,
+     on_click: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
+     size: Size,
+@@ -43,6 +44,7 @@ impl Switch {
+             disabled: false,
+             label: None,
+             accessibility_label: None,
++            accessibility_description: None,
+             on_click: None,
+             label_side: Side::Right,
+             size: Size::Medium,
+@@ -95,6 +97,12 @@ impl Switch {
+         self
+     }
+ 
++    /// Supplementary help announced after the switch's name and value.
++    pub fn accessibility_description(mut self, description: impl Into<SharedString>) -> Self {
++        self.accessibility_description = Some(description.into());
++        self
++    }
++
+     /// Alias for [`Self::on_change`]. The last callback registered with either name wins.
+     pub fn on_click<F>(self, handler: F) -> Self
+     where
+@@ -267,6 +275,9 @@ impl RenderOnce for Switch {
+                 .when_some(accessibility_label, |this, label| {
+                     this.accessibility_label(label)
+                 })
++                .when_some(self.accessibility_description, |this, description| {
++                    gpui::StatefulInteractiveElement::aria_description(this, description)
++                })
+                 .when_some(on_click, |this, on_click| {
+                     this.on_change(move |next, _, window, cx| on_click(&next, window, cx))
+                 })
+diff --git a/crates/component/src/tab/tab_bar.rs b/crates/component/src/tab/tab_bar.rs
+index f54663f5..312b9cb4 100644
+--- a/crates/component/src/tab/tab_bar.rs
++++ b/crates/component/src/tab/tab_bar.rs
+@@ -93,6 +93,12 @@ impl TabBar {
+         self
+     }
+ 
++    /// Give the tab list an accessible name independently of its tab labels.
++    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
++        self.base = self.base.aria_label(label);
++        self
++    }
++
+     /// Set the Tab variant, all children will inherit the variant.
+     pub fn with_variant(mut self, variant: TabVariant) -> Self {
+         self.variant = variant;
+@@ -877,6 +883,39 @@ mod tests {
+     use super::*;
+     use crate::scroll::ScrollableElement as _;
+ 
++    #[gpui::test]
++    fn accessible_tab_list_name_forwards_to_the_base_node(cx: &mut TestAppContext) {
++        use gpui::{Element as _, Role, accesskit, canvas};
++        use std::sync::{Arc, Mutex};
++
++        struct Probe(Arc<Mutex<Option<accesskit::Node>>>);
++        impl Render for Probe {
++            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++                let captured = self.0.clone();
++                canvas(
++                    move |_, window, cx| {
++                        let mut node = accesskit::Node::new(Role::TabList);
++                        TabBar::new("details")
++                            .accessibility_label("Details")
++                            .base
++                            .render(window, cx)
++                            .into_element()
++                            .write_a11y_info(&mut node);
++                        *captured.lock().unwrap() = Some(node);
++                    },
++                    |_, _, _, _| {},
++                )
++            }
++        }
++        let captured = Arc::new(Mutex::new(None));
++        let result = captured.clone();
++        let (_, cx) = cx.add_window_view(move |_, _| Probe(captured));
++        cx.update(|window, cx| window.draw(cx).clear(cx));
++        let node = result.lock().unwrap().take().unwrap();
++        assert_eq!(node.role(), Role::TabList);
++        assert_eq!(node.label(), Some("Details"));
++    }
++
+     struct Harness {
+         group_handler: bool,
+         disabled: bool,
