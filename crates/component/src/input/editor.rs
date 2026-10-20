@@ -225,7 +225,8 @@ mod tests {
     #[gpui::test]
     fn the_rows_follow_the_font_size(cx: &mut TestAppContext) {
         // With nothing set, the theme's monospace size, not the ambient one.
-        assert_eq!(line_height(cx, None), px(20.));
+        // Rows keep the fractional line height rather than rounding to 20px.
+        assert_eq!(line_height(cx, None), px(19.5));
         // A text style set on the editor refines over that, rows and all.
         assert_eq!(line_height(cx, Some(px(24.))), px(36.));
         assert_eq!(line_height(cx, Some(px(40.))), px(60.));

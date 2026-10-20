@@ -228,9 +228,8 @@ impl Root {
     }
 
     fn on_action_copy(&mut self, _: &Copy, window: &mut Window, cx: &mut Context<Self>) {
-        let text = crate::TextSelection::selected_text(window, cx)
-            .trim()
-            .to_string();
+        // Copy the selection exactly; indentation and selected spaces are text.
+        let text = crate::TextSelection::selected_text(window, cx);
         if text.is_empty() {
             cx.propagate();
             return;
