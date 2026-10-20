@@ -63,6 +63,7 @@ pub enum TabVariant {
 impl TabVariant {
     fn height(&self, size: Size) -> Pixels {
         match size {
+            Size::Size(height) => height,
             Size::XSmall => match self {
                 TabVariant::Underline => px(26.),
                 _ => px(20.),
@@ -84,6 +85,13 @@ impl TabVariant {
 
     pub(super) fn inner_height(&self, size: Size) -> Pixels {
         match size {
+            Size::Size(height) => (height
+                - match self {
+                    TabVariant::Underline => px(6.),
+                    TabVariant::Segmented => px(8.),
+                    _ => px(2.),
+                })
+            .max(px(0.)),
             Size::XSmall => match self {
                 TabVariant::Tab | TabVariant::Outline | TabVariant::Pill => px(18.),
                 TabVariant::Segmented | TabVariant::Folder => px(16.),
@@ -131,6 +139,14 @@ impl TabVariant {
 
     fn inner_margins(&self, size: Size) -> Edges<Pixels> {
         match size {
+            Size::Size(_) => match self {
+                TabVariant::Underline => Edges {
+                    top: px(2.),
+                    bottom: px(3.),
+                    ..Default::default()
+                },
+                _ => Edges::all(px(0.)),
+            },
             Size::XSmall => match self {
                 TabVariant::Underline => Edges {
                     top: px(1.),
@@ -545,6 +561,7 @@ pub struct Tab {
     children: Vec<AnyElement>,
     variant: TabVariant,
     size: Size,
+    pub(super) label_size: Option<Pixels>,
     pub(super) disabled: bool,
     pub(super) selected: bool,
     pub(super) indicator_active: bool,
@@ -613,6 +630,7 @@ impl Default for Tab {
             suffix: None,
             variant: TabVariant::default(),
             size: Size::default(),
+            label_size: None,
             max_width: None,
             on_click: None,
         }
@@ -963,6 +981,7 @@ impl RenderOnce for Tab {
                 Size::Large => this.text_base(),
                 _ => this.text_sm(),
             })
+            .when_some(self.label_size, |this, size| this.text_size(size))
             .rounded(radius)
             .when(folder, |this| {
                 this.px(metrics.padding_x).pb(metrics.top_padding)
