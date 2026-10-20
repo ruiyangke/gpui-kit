@@ -302,9 +302,9 @@ impl Button {
         self.compact
     }
 
-    /// Presentation supplied by a styled compound control. Standalone buttons
-    /// retain their normal size-derived content style.
-    pub(crate) fn content_style(mut self, style: StyleRefinement, icon_size: Size) -> Self {
+    /// Override the inner label presentation and icon size independently of
+    /// the hit target. Without this, the normal size-derived style is retained.
+    pub fn content_style(mut self, style: StyleRefinement, icon_size: Size) -> Self {
         self.content_style = style;
         self.icon_size = Some(icon_size);
         self
