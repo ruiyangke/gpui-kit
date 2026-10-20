@@ -398,6 +398,28 @@ fn multicursor_vertical_selection_replaces_and_undoes_each_range(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
+fn typing_into_the_opened_search_panel_keeps_every_character(cx: &mut TestAppContext) {
+    let (handle, state) = editor(cx, "plaintext", "Docker docker");
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.click(("input", state.entity_id()), cx);
+        window.press("secondary-f", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    // A window draws between keystrokes; the first character must survive
+    // the frame after it changes the query.
+    let cx = &mut gpui_kit::VisualTestContext::from_window(handle.into(), cx);
+    for character in ["D", "o", "c", "k", "e", "r"] {
+        cx.simulate_input(character);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+    assert_eq!(
+        state.read_with(cx, |state, _| state.search_session().query.clone()),
+        "Docker"
+    );
+}
+
+#[gpui_kit::test]
 fn search_keyboard_navigation_wraps_and_escape_returns_editor_focus(cx: &mut TestAppContext) {
     let (handle, state) = editor(cx, "plaintext", "one two one");
     cx.update_window(handle.into(), |_, window, cx| {
