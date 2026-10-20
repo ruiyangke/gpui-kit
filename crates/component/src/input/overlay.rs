@@ -354,12 +354,14 @@ impl<M: OverlayMode> InputOverlayHost<M> {
             // session. Re-showing it for that echo would select the query or steal
             // focus from replacement, so preserve changes the panel already holds.
             // External mode changes still move focus out of a hidden replace field.
+            // A query typed in the panel also anchors the session to the viewport.
+            // That anchor is part of the echo: re-showing would select the first
+            // typed character, and the next keystroke would replace it.
             let was = &self.search_signature;
             let query_echo = search_open
                 && was.open
                 && (was.replace_mode == search_signature.replace_mode
                     || panel_replace_mode == search_signature.replace_mode)
-                && was.anchor_offset == search_signature.anchor_offset
                 && was.activation_revision == search_signature.activation_revision
                 && self.search.read(cx).query(cx) == search_session.query;
             self.search_signature = search_signature;
