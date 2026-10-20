@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, DefiniteLength, Entity, IntoElement, RenderOnce, SharedString, StyleRefinement, Styled,
-    Window, prelude::FluentBuilder as _,
+    App, DefiniteLength, Edges, Entity, IntoElement, Pixels, RenderOnce, SharedString,
+    StyleRefinement, Styled, Window, prelude::FluentBuilder as _,
 };
 
 use super::{Input, TextareaState};
@@ -19,6 +19,7 @@ pub struct Textarea {
     style: StyleRefinement,
     size: Size,
     height: Option<DefiniteLength>,
+    content_padding: Option<Edges<Pixels>>,
     appearance: bool,
     bordered: bool,
     disabled: bool,
@@ -73,6 +74,7 @@ impl Textarea {
             style: StyleRefinement::default(),
             size: Size::default(),
             height: None,
+            content_padding: None,
             appearance: true,
             bordered: true,
             disabled: false,
@@ -91,6 +93,13 @@ impl Textarea {
 
     pub fn h(mut self, height: impl Into<DefiniteLength>) -> Self {
         self.height = Some(height.into());
+        self
+    }
+
+    /// Override the text engine's internal inset. Frame padding set with
+    /// `Styled` remains separate; omitting this preserves the size-based inset.
+    pub fn content_padding(mut self, padding: Edges<Pixels>) -> Self {
+        self.content_padding = Some(padding);
         self
     }
 
@@ -204,6 +213,9 @@ impl Textarea {
             .role(self.role)
             .with_size(self.size)
             .when_some(self.height, |this, height| this.h(height))
+            .when_some(self.content_padding, |this, padding| {
+                this.content_padding(padding)
+            })
             .when_some(self.accessibility_id, |this, id| this.accessibility_id(id))
             .when_some(self.aria_label, |this, label| this.aria_label(label))
             .when_some(self.context_menu_builder, |this, build| {

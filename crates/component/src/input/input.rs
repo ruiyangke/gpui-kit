@@ -3,7 +3,7 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, DefiniteLength, Edges, ElementId, Entity, Hsla, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, Rems, RenderOnce, Role, SharedString,
+    IntoElement, MouseButton, ParentElement as _, Pixels, Rems, RenderOnce, Role, SharedString,
     StyleRefinement, Styled, TextAlign, TouchPhase, Window, div, px, relative,
 };
 
@@ -117,6 +117,7 @@ pub struct Input {
     prefix: Option<AnyElement>,
     suffix: Option<AnyElement>,
     height: Option<DefiniteLength>,
+    content_padding: Option<Edges<Pixels>>,
     appearance: bool,
     cleanable: bool,
     mask_toggle: bool,
@@ -207,6 +208,12 @@ impl Input {
         self
     }
 
+    /// Override the internal multi-line text inset, independently of frame padding.
+    pub(crate) fn content_padding(mut self, padding: Edges<Pixels>) -> Self {
+        self.content_padding = Some(padding);
+        self
+    }
+
     /// Create a new [`Input`] element bind to the [`InputState`].
     pub fn new(state: &Entity<InputState>) -> Self {
         Self::with_state(state.clone().into())
@@ -225,6 +232,7 @@ impl Input {
             id: None,
             state,
             size: Size::default(),
+            content_padding: None,
             style: StyleRefinement::default(),
             prefix: None,
             suffix: None,
@@ -571,20 +579,22 @@ impl RenderOnce for Input {
             cx,
         );
         state.set_editor_paddings(
-            if state.presentation(cx).is_multi_line() {
-                Edges {
-                    top: self.size.input_py(),
-                    right: self.size.input_px(),
-                    bottom: self.size.input_py(),
-                    left: if state.presentation(cx).is_code_editor() {
-                        self.size.input_px().min(px(6.))
-                    } else {
-                        self.size.input_px()
-                    },
+            self.content_padding.unwrap_or_else(|| {
+                if state.presentation(cx).is_multi_line() {
+                    Edges {
+                        top: self.size.input_py(),
+                        right: self.size.input_px(),
+                        bottom: self.size.input_py(),
+                        left: if state.presentation(cx).is_code_editor() {
+                            self.size.input_px().min(px(6.))
+                        } else {
+                            self.size.input_px()
+                        },
+                    }
+                } else {
+                    Edges::default()
                 }
-            } else {
-                Edges::default()
-            },
+            }),
             cx,
         );
         state.set_disabled(self.disabled, cx);

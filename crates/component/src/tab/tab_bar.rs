@@ -58,6 +58,7 @@ pub struct TabBar {
     selected_index: Option<usize>,
     variant: TabVariant,
     size: Size,
+    label_size: Option<Pixels>,
     menu: bool,
     max_width: Option<Pixels>,
     on_click: Option<Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>>,
@@ -77,12 +78,19 @@ impl TabBar {
             suffix: None,
             variant: TabVariant::default(),
             size: Size::default(),
+            label_size: None,
             last_empty_space: div().w_3().into_any_element(),
             selected_index: None,
             on_click: None,
             menu: false,
             max_width: None,
         }
+    }
+
+    /// Set the label size for all tabs independently from their height.
+    pub fn label_size(mut self, size: Pixels) -> Self {
+        self.label_size = Some(size);
+        self
     }
 
     /// Set the Tab variant, all children will inherit the variant.
@@ -518,6 +526,7 @@ impl RenderOnce for TabBar {
                 .max_width(max_width)
                 .with_variant(self.variant)
                 .with_size(self.size);
+            tab.label_size = self.label_size;
             tab.indicator_active = has_indicator;
             tab.indicator_ready = indicator_ready;
             tab.indicator_epoch = indicator_epoch;
