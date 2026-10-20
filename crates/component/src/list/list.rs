@@ -21,6 +21,7 @@ use gpui::{
     AppContext, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
     Length, MouseButton, ParentElement, Render, Styled, Task, Window, div, prelude::FluentBuilder,
 };
+use gpui_base::TestSupportExt as _;
 use rust_i18n::t;
 
 pub(crate) fn init(cx: &mut App) {
@@ -501,6 +502,7 @@ where
 
         div()
             .id(id)
+            .test_support()
             .role(Role::ListItem)
             .aria_position_in_set(ix.row + 1)
             .aria_size_of_set(total_items)
