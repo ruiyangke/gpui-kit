@@ -10,9 +10,9 @@ use crate::{
     tooltip::{ManagedTooltipExt as _, Tooltip},
 };
 use gpui::{
-    AnyElement, App, Background, ClickEvent, Corners, Edges, ElementId, Hsla, InteractiveElement,
-    Interactivity, IntoElement, MouseButton, ParentElement, Pixels, RenderOnce, Role, SharedString,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
+    AnyElement, App, Background, ClickEvent, Corners, Edges, ElementId, FocusHandle, Hsla,
+    InteractiveElement, Interactivity, IntoElement, MouseButton, ParentElement, Pixels, RenderOnce,
+    Role, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder as _, relative, transparent_white,
 };
 
@@ -227,6 +227,7 @@ pub struct Button {
     loading: bool,
     loading_icon: Option<Icon>,
     focus_ring_enabled: bool,
+    provided_focus_handle: Option<FocusHandle>,
 
     tab_index: isize,
     tab_stop: bool,
@@ -272,6 +273,7 @@ impl Button {
             tooltip_builder: None,
             on_click: None,
             focus_ring_enabled: true,
+            provided_focus_handle: None,
             on_hover: None,
             loading: false,
             compact: false,
@@ -450,6 +452,12 @@ impl Button {
     /// Set the button to compact mode, then padding will be reduced.
     pub fn compact(mut self) -> Self {
         self.compact = true;
+        self
+    }
+
+    /// Uses a caller-owned focus handle instead of creating keyed state.
+    pub fn track_focus(mut self, handle: &FocusHandle) -> Self {
+        self.provided_focus_handle = Some(handle.clone());
         self
     }
 
@@ -637,10 +645,12 @@ impl RenderOnce for Button {
             FocusLine::Inside(normal_style.fg.opacity(FOCUS_LINE_OPACITY))
         };
 
-        let focus_handle = window
-            .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
-            .read(cx)
-            .clone();
+        let focus_handle = self.provided_focus_handle.unwrap_or_else(|| {
+            window
+                .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+                .read(cx)
+                .clone()
+        });
         let is_focused = focus_handle.is_focused(window);
 
         let rounding = match self.rounded {
@@ -1523,6 +1533,106 @@ mod tests {
 
         assert_eq!(clicks.get(), 3);
         assert_eq!(keyboard_clicks.get(), 2);
+    }
+
+    #[gpui::test]
+    fn supplied_focus_handle_preserves_keyboard_activation_and_disabled_behavior(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::{Context, KeyDownEvent, KeyUpEvent, Keystroke, Render, point};
+        use std::{cell::Cell, rc::Rc};
+
+        struct Harness {
+            focus: FocusHandle,
+            disabled: bool,
+            clicks: Rc<Cell<usize>>,
+        }
+        impl Render for Harness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let clicks = self.clicks.clone();
+                div()
+                    .tab_group()
+                    .child(
+                        Button::new("supplied-focus")
+                            .track_focus(&self.focus)
+                            .label("Supplied")
+                            .w(px(100.))
+                            .h(px(32.))
+                            .disabled(self.disabled)
+                            .on_click(move |_, _, _| clicks.set(clicks.get() + 1)),
+                    )
+                    .child(Button::new("default-focus").label("Default"))
+            }
+        }
+
+        fn activate(cx: &mut gpui::VisualTestContext) {
+            for key in ["enter", "space"] {
+                let keystroke = Keystroke::parse(key).unwrap();
+                cx.simulate_event(KeyDownEvent {
+                    #[cfg(not(feature = "gpui-fast"))]
+                    physical_key: None,
+                    #[cfg(not(feature = "gpui-fast"))]
+                    key_metadata: None,
+                    keystroke: keystroke.clone(),
+                    is_held: false,
+                    prefer_character_input: false,
+                });
+                cx.simulate_event(KeyUpEvent {
+                    #[cfg(not(feature = "gpui-fast"))]
+                    physical_key: None,
+                    #[cfg(not(feature = "gpui-fast"))]
+                    key_metadata: None,
+                    keystroke,
+                });
+            }
+        }
+
+        cx.update(crate::init);
+        let clicks = Rc::new(Cell::new(0));
+        let (view, cx) = cx.add_window_view(|_, cx| Harness {
+            focus: cx.focus_handle(),
+            disabled: false,
+            clicks: clicks.clone(),
+        });
+        let supplied = view.read_with(cx, |view, _| view.focus.clone());
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            window.focus_next(cx);
+            assert_eq!(window.focused(cx).as_ref(), Some(&supplied));
+        });
+        activate(cx);
+        assert_eq!(clicks.get(), 2);
+
+        view.update(cx, |view, cx| {
+            view.disabled = true;
+            cx.notify();
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        activate(cx);
+        cx.simulate_click(point(px(10.), px(10.)), Default::default());
+        assert_eq!(
+            clicks.get(),
+            2,
+            "a disabled supplied handle cannot activate"
+        );
+        let default_focus = cx.update(|window, cx| {
+            window.focus_next(cx);
+            let focused = window.focused(cx).expect("the default button is focusable");
+            assert_ne!(focused, supplied, "disabled buttons are not Tab stops");
+            focused
+        });
+        view.update(cx, |view, cx| {
+            view.disabled = false;
+            cx.notify();
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            assert_eq!(window.focused(cx).as_ref(), Some(&default_focus));
+            window.focus_next(cx);
+            assert_eq!(window.focused(cx).as_ref(), Some(&supplied));
+        });
+        activate(cx);
+        assert_eq!(clicks.get(), 4);
     }
 
     #[gpui::test]

@@ -27,6 +27,7 @@ pub struct DropdownButton {
     id: ElementId,
     style: StyleRefinement,
     button: Option<Button>,
+    menu_trigger: Option<Button>,
     menu:
         Option<Box<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static>>,
     selected: bool,
@@ -47,6 +48,7 @@ impl DropdownButton {
             id: id.into(),
             style: StyleRefinement::default(),
             button: None,
+            menu_trigger: None,
             menu: None,
             selected: false,
             disabled: false,
@@ -78,6 +80,13 @@ impl DropdownButton {
     /// button's value becomes the shared value for both halves.
     pub fn button(mut self, button: Button) -> Self {
         self.button = Some(button);
+        self
+    }
+
+    /// Customize the menu half's sizing, accessible label and tooltip.
+    /// The split control still owns its joined borders and menu behavior.
+    pub fn menu_trigger(mut self, button: Button) -> Self {
+        self.menu_trigger = Some(button);
         self
     }
 
@@ -203,9 +212,12 @@ impl RenderOnce for DropdownButton {
                 )
             })
             .when_some(self.menu, |this, menu| {
+                let trigger = self
+                    .menu_trigger
+                    .unwrap_or_else(|| Button::new("popup").dropdown_caret(true));
+                let disabled = self.disabled || trigger.is_disabled();
                 this.child(
-                    Button::new("popup")
-                        .dropdown_caret(true)
+                    trigger
                         .accessibility_label(
                             self.menu_accessibility_label
                                 .unwrap_or_else(|| t!("DropdownButton.more_options").into()),
@@ -223,7 +235,7 @@ impl RenderOnce for DropdownButton {
                             bottom: true,
                         })
                         .selected(selected)
-                        .disabled(self.disabled)
+                        .disabled(disabled)
                         .when(self.outline, |this| this.outline())
                         .with_size(size)
                         .with_variant(variant)
