@@ -33,6 +33,52 @@ impl From<ShapedLine> for InputLine {
     }
 }
 impl InputLine {
+    /// Lay out literal tabs at space-based stops while keeping source byte offsets.
+    /// The document, search ranges and clipboard contents are never expanded.
+    pub(crate) fn with_tabs(line: ShapedLine, tab_width: Pixels) -> Self {
+        if !line.text.contains('\t') || tab_width <= px(0.) {
+            return line.into();
+        }
+        let text = line.text.clone();
+        let mut cursor = line.cursor();
+        let mut fragments = Vec::new();
+        let mut start = 0;
+        let mut x = px(0.);
+        for (index, _) in text.match_indices('\t') {
+            if start < index {
+                let part = cursor.take_until(index);
+                let width = part.width;
+                fragments.push(InlineFragment {
+                    range: start..index,
+                    x,
+                    width,
+                    text: Some(part),
+                });
+                x += width;
+            }
+            cursor.take_until(index + 1);
+            let stop = tab_width * ((x / tab_width + 0.0001).floor() + 1.);
+            fragments.push(InlineFragment {
+                range: index..index + 1,
+                x,
+                width: stop - x,
+                text: None,
+            });
+            x = stop;
+            start = index + 1;
+        }
+        if start < text.len() {
+            let part = cursor.take_until(text.len());
+            fragments.push(InlineFragment {
+                range: start..text.len(),
+                x,
+                width: part.width,
+                text: Some(part),
+            });
+        }
+        Self::inline(text, fragments)
+    }
+
     pub(crate) fn inline(text: SharedString, fragments: Vec<InlineFragment>) -> Self {
         let width = fragments.last().map_or(px(0.), |f| f.x + f.width);
         Self {
