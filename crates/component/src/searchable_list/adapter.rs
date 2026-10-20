@@ -1,4 +1,7 @@
-use gpui::{AnyElement, App, Context, IntoElement, ParentElement as _, Styled as _, Window, div};
+use gpui::{
+    AnyElement, App, Context, IntoElement, ParentElement as _, Pixels, Styled as _, Window, div,
+    prelude::FluentBuilder as _,
+};
 
 use crate::{
     ActiveTheme, Disableable as _, Icon, IconName, IndexPath, Sizable as _, Size, StyleSized as _,
@@ -25,12 +28,13 @@ pub(crate) struct SearchableListAdapter<D: SearchableListDelegate + 'static> {
     pub(crate) selection_snapshot: Vec<(IndexPath, D::Item)>,
     /// Called when the user confirms an item (click or Enter).
     on_confirm:
-        Box<dyn Fn(Option<IndexPath>, bool, &mut Window, &mut Context<ListState<Self>>) + 'static>,
+        Box<dyn Fn(Option<D::Item>, bool, &mut Window, &mut Context<ListState<Self>>) + 'static>,
     /// Called when the user cancels (Escape) or focus leaves the dropdown.
     on_cancel: Box<dyn Fn(Option<IndexPath>, &mut Window, &mut Context<ListState<Self>>) + 'static>,
     /// Renders the empty-state placeholder.
     on_render_empty: Box<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>,
     pub(crate) size: Size,
+    pub(crate) item_min_height: Option<Pixels>,
     /// Override the trailing check icon; defaults to `IconName::Check`.
     pub(crate) check_icon: Option<Icon>,
 }
@@ -38,8 +42,7 @@ pub(crate) struct SearchableListAdapter<D: SearchableListDelegate + 'static> {
 impl<D: SearchableListDelegate + 'static> SearchableListAdapter<D> {
     pub(crate) fn new(
         delegate: D,
-        on_confirm: impl Fn(Option<IndexPath>, bool, &mut Window, &mut Context<ListState<Self>>)
-        + 'static,
+        on_confirm: impl Fn(Option<D::Item>, bool, &mut Window, &mut Context<ListState<Self>>) + 'static,
         on_cancel: impl Fn(Option<IndexPath>, &mut Window, &mut Context<ListState<Self>>) + 'static,
         on_render_empty: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
     ) -> Self {
@@ -51,6 +54,7 @@ impl<D: SearchableListDelegate + 'static> SearchableListAdapter<D> {
             on_cancel: Box::new(on_cancel),
             on_render_empty: Box::new(on_render_empty),
             size: Size::default(),
+            item_min_height: None,
             check_icon: None,
         }
     }
@@ -120,6 +124,7 @@ impl<D: SearchableListDelegate + 'static> ListDelegate for SearchableListAdapter
                 SearchableListItemElement::new(ix.row)
                     .disabled(disabled)
                     .with_size(size)
+                    .when_some(self.item_min_height, |row, height| row.min_h(height))
                     .child(el),
             );
         }
@@ -140,6 +145,7 @@ impl<D: SearchableListDelegate + 'static> ListDelegate for SearchableListAdapter
                 .check_icon(check_icon)
                 .disabled(disabled)
                 .with_size(size)
+                .when_some(self.item_min_height, |row, height| row.min_h(height))
                 .child(content.into_any_element()),
         )
     }
@@ -159,7 +165,9 @@ impl<D: SearchableListDelegate + 'static> ListDelegate for SearchableListAdapter
         if !self.delegate.is_item_enabled(ix, item, cx) {
             return;
         }
-        (self.on_confirm)(self.selected_index, secondary, window, cx);
+        // Pass the item, not its row: search or a page response may replace
+        // this row before the owner's deferred callback runs.
+        (self.on_confirm)(Some(item.clone()), secondary, window, cx);
     }
 
     fn perform_search(

@@ -239,6 +239,7 @@ fn languages(
                 cx.subscribe(&state, |this: &mut Languages, _, event, _| match event {
                     ComboboxEvent::Change(values) => this.changes.push(values.clone()),
                     ComboboxEvent::Confirm(values) => this.confirmations.push(values.clone()),
+                    ComboboxEvent::Activate(_) => {}
                 });
             Languages {
                 state,
