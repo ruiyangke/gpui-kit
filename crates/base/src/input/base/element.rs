@@ -47,6 +47,15 @@ fn diagnostic_highlight_style(
     }
 }
 
+// Preserve fractional CSS-like line spacing. Layout, hit testing, scrolling and
+// paint must share this value rather than rounding every row to a logical pixel.
+pub(super) fn text_line_height(window: &Window) -> Pixels {
+    let style = window.text_style();
+    style
+        .line_height
+        .to_pixels(style.font_size, window.rem_size())
+}
+
 const BOTTOM_MARGIN_ROWS: usize = 3;
 pub(super) const RIGHT_MARGIN: Pixels = px(10.);
 pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(6.);
@@ -504,7 +513,7 @@ impl<M: InputModeKind> TextElement<M> {
                     && hitbox.should_handle_scroll(window)
                     && state
                         .read(cx)
-                        .takes_scroll(event.delta.pixel_delta(window.line_height()))
+                        .takes_scroll(event.delta.pixel_delta(text_line_height(window)))
                 {
                     crate::scroll_bounce::claim_scroll(hitbox, cx);
                 }
@@ -2651,7 +2660,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let state = self.state.read(cx);
-        let line_height = window.line_height();
+        let line_height = text_line_height(window);
 
         let mut style = Style::default();
         style.size.width = relative(1.).into();
@@ -2760,7 +2769,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             });
         }
 
-        let line_height = window.line_height();
+        let line_height = text_line_height(window);
         let token_elements = self.measure_tokens(
             (bounds.size.width - line_number_width - RIGHT_MARGIN).max(px(1.)),
             line_height,
@@ -3245,7 +3254,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
         );
 
         // Paint multi line text
-        let line_height = window.line_height();
+        let line_height = text_line_height(window);
         let origin = bounds.origin;
 
         let invisible_top_padding = prepaint.last_layout.visible_top;
@@ -4649,9 +4658,11 @@ mod tests {
                     corners.top_right.x,
                     first.wrap_indent + first.wrapped_lines[index + 1].width
                 );
-                assert_eq!(
-                    corners.bottom_left.y - corners.top_left.y,
-                    layout.line_height
+                // Fractional line heights lose a few ulps when subtracting
+                // absolute row positions; keep the geometry within 0.001 px.
+                assert!(
+                    ((corners.bottom_left.y - corners.top_left.y) - layout.line_height).abs()
+                        < px(0.001)
                 );
             }
             let blank_offset = text.find("\n\n").unwrap() + 1;
