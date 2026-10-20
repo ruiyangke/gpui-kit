@@ -1574,6 +1574,10 @@ mod tests {
             keystroke = keystroke.with_simulated_ime();
         }
         cx.simulate_event(KeyDownEvent {
+            #[cfg(not(feature = "gpui-fast"))]
+            physical_key: None,
+            #[cfg(not(feature = "gpui-fast"))]
+            key_metadata: None,
             keystroke,
             is_held,
             prefer_character_input: false,
@@ -2091,11 +2095,21 @@ mod tests {
     fn press(cx: &mut VisualTestContext, key: &str) {
         let keystroke = Keystroke::parse(key).unwrap();
         cx.simulate_event(KeyDownEvent {
+            #[cfg(not(feature = "gpui-fast"))]
+            physical_key: None,
+            #[cfg(not(feature = "gpui-fast"))]
+            key_metadata: None,
             keystroke: keystroke.clone(),
             is_held: false,
             prefer_character_input: false,
         });
-        cx.simulate_event(gpui::KeyUpEvent { keystroke });
+        cx.simulate_event(gpui::KeyUpEvent {
+            #[cfg(not(feature = "gpui-fast"))]
+            physical_key: None,
+            #[cfg(not(feature = "gpui-fast"))]
+            key_metadata: None,
+            keystroke,
+        });
     }
 
     fn focus_choice(
