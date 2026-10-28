@@ -1645,11 +1645,79 @@ mod tests {
             .expect("randomized tree window should remain open until the case completes");
     }
 
-    #[gpui::property_test(config = ProptestConfig {
+    // The registry proptest macro does not support the `proptest_path` option
+    // emitted by the upstream GPUI macro. Keep its scheduler and case strategies
+    // here without changing the snapshot's production macro or dependencies.
+    #[proptest::property_test(config = gpui::apply_seed_to_proptest_config(ProptestConfig {
         cases: 4,
         ..Default::default()
-    })]
-    fn randomized_element_tree_matches_full_render(cx: &mut TestAppContext, seed: u64) {
+    }))]
+    fn randomized_element_tree_matches_full_render(
+        #[strategy = gpui::seed_strategy()] scheduler_seed: u64,
+        seed: u64,
+    ) {
+        with_render_equivalence_context(scheduler_seed, move |cx| {
+            run_render_equivalence_cases(cx, seed);
+        });
+    }
+
+    fn with_render_equivalence_context(
+        scheduler_seed: u64,
+        run: impl FnOnce(&mut TestAppContext) + std::panic::UnwindSafe + 'static,
+    ) {
+        use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
+        let result = gpui::run_test_once(
+            scheduler_seed,
+            Box::new(move |dispatcher| {
+                let mut cx = TestAppContext::build(
+                    dispatcher.clone(),
+                    Some("randomized_element_tree_matches_full_render"),
+                );
+                // Evaluate every cleanup stage even when a case or an earlier
+                // stage panics. Resume the first panic after scheduler teardown,
+                // so Proptest can shrink the failure without retaining a context.
+                let outcomes = [
+                    catch_unwind(AssertUnwindSafe(|| run(&mut cx))),
+                    catch_unwind(AssertUnwindSafe(|| dispatcher.run_until_parked())),
+                    catch_unwind(AssertUnwindSafe(|| {
+                        cx.executor().forbid_parking();
+                        cx.quit();
+                    })),
+                    catch_unwind(AssertUnwindSafe(|| dispatcher.run_until_parked())),
+                ];
+                outcomes.into_iter().collect::<Result<(), _>>()
+            }),
+        );
+        if let Err(error) = result {
+            resume_unwind(error);
+        }
+    }
+
+    #[test]
+    fn render_equivalence_context_quits_after_a_failed_case() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        let quit = Arc::new(AtomicBool::new(false));
+        let observed_quit = quit.clone();
+        let result = std::panic::catch_unwind(move || {
+            with_render_equivalence_context(0, move |cx| {
+                cx.on_quit(move || observed_quit.store(true, Ordering::SeqCst));
+                panic!("failed render-equivalence case");
+            });
+        });
+        let error = result.expect_err("the original property failure must propagate");
+        assert_eq!(
+            error.downcast_ref::<&str>(),
+            Some(&"failed render-equivalence case")
+        );
+        assert!(quit.load(Ordering::SeqCst));
+    }
+
+    fn run_render_equivalence_cases(cx: &mut TestAppContext, seed: u64) {
         for topology in 0..4 {
             let topology_seed = (seed & !3) | topology;
             let config = RandomizedElementTreeConfig::new(topology_seed, ELEMENT_COUNT)
