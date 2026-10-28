@@ -2067,6 +2067,18 @@ impl Window {
                     .unwrap_or(DispatchEventResult::default())
             })
         });
+        #[cfg(target_os = "windows")]
+        platform_window.on_prepare_key_input({
+            let mut cx = cx.to_async();
+            Box::new(move |key_down| {
+                handle
+                    .update(&mut cx, |_, window, cx| {
+                        window.prepare_key_input(key_down, cx)
+                    })
+                    .log_err()
+                    .is_some()
+            })
+        });
         platform_window.on_hit_test_window_control({
             let mut cx = cx.to_async();
             Box::new(move || {
@@ -6140,6 +6152,9 @@ impl Window {
             return InputPreference::KeyBindings;
         };
         let accepts_text_input = input_handler.accepts_text_input(self, cx);
+        #[cfg(target_os = "windows")]
+        let accepts_text_input =
+            accepts_text_input || input_handler.accepts_native_characters(self, cx);
         self.platform_window.set_input_handler(input_handler);
         if accepts_text_input {
             InputPreference::CharacterInput
@@ -6148,7 +6163,24 @@ impl Window {
         }
     }
 
+    #[cfg(target_os = "windows")]
+    fn prepare_key_input(&mut self, key_down: bool, cx: &mut App) {
+        // Native character routing captures the painted handler before key
+        // listeners run. Prepare the same modality and dirty frame that key
+        // dispatch uses, without borrowing an input handler across the paint.
+        if key_down && self.last_input_modality != InputModality::Keyboard {
+            self.last_input_modality = InputModality::Keyboard;
+            self.refresh();
+        }
+        if self.invalidator.is_dirty() {
+            self.draw(cx).clear(cx);
+        }
+    }
+
     fn dispatch_key_event(&mut self, event: &dyn Any, cx: &mut App) {
+        #[cfg(target_os = "windows")]
+        self.prepare_key_input(event.is::<KeyDownEvent>(), cx);
+        #[cfg(not(target_os = "windows"))]
         if self.invalidator.is_dirty() {
             self.draw(cx).clear(cx);
         }
@@ -10079,3 +10111,6 @@ mod inspector_tests {
         .expect("closed inspector has no bookkeeping and no style overrides");
     }
 }
+
+#[cfg(all(test, target_os = "windows"))]
+mod native_character_tests;

@@ -31,6 +31,39 @@ pub(crate) const WM_GPUI_DISPLAYS_CHANGED: u32 = WM_USER + 10;
 
 const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
 
+thread_local! {
+    // The keyboard layout's dead-key state is the thread's. TranslateMessage
+    // and the native character translator both keep it, and the next text key
+    // must reach whichever holds it even when it produces ASCII.
+    static NATIVE_CHARACTERS: Cell<NativeCharacterState> = const {
+        Cell::new(NativeCharacterState {
+            dead_key_pending: false,
+        })
+    };
+}
+
+#[derive(Clone, Copy, Default)]
+struct NativeCharacterState {
+    dead_key_pending: bool,
+}
+
+impl NativeCharacterState {
+    fn prefers_text(self, has_text: bool, prefer_character_input: bool) -> bool {
+        prefer_character_input || (self.dead_key_pending && has_text)
+    }
+
+    fn key_dispatched(&mut self, has_text: bool, dead_key: bool, handled: bool) {
+        if !handled && has_text {
+            self.dead_key_pending = dead_key;
+        }
+    }
+
+    fn native_translated(&mut self, translation: &crate::native_characters::Translation) {
+        self.dead_key_pending =
+            matches!(translation, crate::native_characters::Translation::DeadKey);
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 pub(crate) struct NativeModalLoops {
     size_move: bool,
@@ -152,6 +185,10 @@ impl WindowsWindowInner {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        // Native focus may leave and return before GPUI's deferred observers run.
+        self.state
+            .native_character_authority
+            .observe(msg, wparam, lparam);
         let handled = match msg {
             // `DefWindowProc` answers `MA_NOACTIVATE` for a left click on `HTCAPTION`.
             // The activation is only triggered when `DefWindowProc` handles the following `WM_NCLBUTTONDOWN`.
@@ -608,13 +645,14 @@ impl WindowsWindowInner {
     }
 
     fn handle_syskeyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
-        let input = handle_key_event(wparam, lparam, &self.state, |keystroke, _, metadata| {
-            PlatformInput::KeyUp(KeyUpEvent {
-                physical_key: physical_key_from_lparam(lparam),
-                key_metadata: Some(metadata),
-                keystroke,
-            })
-        })?;
+        let (input, _) =
+            handle_key_event(wparam, lparam, &self.state, |keystroke, _, metadata| {
+                PlatformInput::KeyUp(KeyUpEvent {
+                    physical_key: physical_key_from_lparam(lparam),
+                    key_metadata: Some(metadata),
+                    keystroke,
+                })
+            })?;
         let mut func = self.state.callbacks.input.take()?;
 
         func(input);
@@ -627,7 +665,10 @@ impl WindowsWindowInner {
     // It's a known bug that you can't trigger `ctrl-shift-0`. See:
     // https://superuser.com/questions/1455762/ctrl-shift-number-key-combination-has-stopped-working-for-a-few-numbers
     pub(crate) fn handle_keydown_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
-        let Some(input) = handle_key_event(
+        if self.state.closing.get() {
+            return Some(0);
+        }
+        let Some((input, dead_key)) = handle_key_event(
             wparam,
             lparam,
             &self.state,
@@ -641,22 +682,155 @@ impl WindowsWindowInner {
                 })
             },
         ) else {
+            // Some layouts have a native character but no shortcut key name.
+            // Keep that case on the same opt-in path; the probe is nonmutating.
+            let key = VIRTUAL_KEY(wparam.loword());
+            if !matches!(key, VK_PACKET | VK_PROCESSKEY) {
+                let (text, prefer_characters, dead_key) = process_key(key, lparam.hiword());
+                let modifiers = current_modifiers();
+                let native_text =
+                    prefer_characters || (text.is_some() && !modifiers.control && !modifiers.alt);
+                if native_text && !modifiers.platform {
+                    if let Some(origin) = self.prepare_native_character_target(true) {
+                        return self.handle_native_character_msg(origin, wparam, lparam);
+                    }
+                    if self.state.closing.get() {
+                        return Some(0);
+                    }
+                }
+                NATIVE_CHARACTERS.with(|state| {
+                    let mut next = state.get();
+                    next.key_dispatched(text.is_some(), dead_key, false);
+                    state.set(next);
+                });
+            }
             return Some(1);
         };
 
-        let Some(mut func) = self.state.callbacks.input.take() else {
-            return Some(1);
+        let native_target =
+            self.prepare_native_character_target(matches!(&input, PlatformInput::KeyDown(_)));
+        if self.state.closing.get() {
+            return Some(0);
+        }
+        let has_text =
+            matches!(&input, PlatformInput::KeyDown(event) if event.keystroke.key_char.is_some());
+        let native_preference = if let PlatformInput::KeyDown(event) = &input {
+            event.prefer_character_input && !event.keystroke.modifiers.platform
+        } else {
+            false
         };
-
-        let handled = !func(input).propagate;
-
-        self.state.callbacks.input.set(Some(func));
+        let handled = if let Some(mut func) = self.state.callbacks.input.take() {
+            let handled = !func(input).propagate;
+            self.state.callbacks.input.set(Some(func));
+            handled
+        } else {
+            false
+        };
+        if !handled
+            && native_preference
+            && let Some(origin) = native_target
+        {
+            return self.handle_native_character_msg(origin, wparam, lparam);
+        }
+        NATIVE_CHARACTERS.with(|state| {
+            let mut next = state.get();
+            next.key_dispatched(has_text, dead_key, handled);
+            state.set(next);
+        });
 
         if handled { Some(0) } else { Some(1) }
     }
 
+    fn prepare_native_character_target(
+        &self,
+        key_down: bool,
+    ) -> Option<crate::native_characters::Origin> {
+        if self.state.closing.get() {
+            return None;
+        }
+        // Paint before borrowing an input handler: painting may replace it.
+        let mut callback = self.state.callbacks.prepare_key_input.take()?;
+        let prepared = callback(key_down);
+        if self.state.closing.get() {
+            return None;
+        }
+        let replacement = self.state.callbacks.prepare_key_input.take();
+        self.state
+            .callbacks
+            .prepare_key_input
+            .set(replacement.or(Some(callback)));
+        if !prepared {
+            return None;
+        }
+        self.with_input_handler(|handler| handler.native_character_target())
+            .flatten()
+            .filter(|_| unsafe { GetFocus() } == self.native_handle())
+            .and_then(|target| {
+                crate::native_characters::Origin::capture(
+                    self.native_handle(),
+                    target,
+                    &self.state.native_character_authority,
+                )
+            })
+    }
+
+    fn handle_native_character_msg(
+        &self,
+        origin: crate::native_characters::Origin,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> Option<isize> {
+        let current = self
+            .with_input_handler(|handler| handler.native_character_target())
+            .flatten();
+        if current != Some(origin.target)
+            || !origin.is_current(&self.state.native_character_authority)
+        {
+            return Some(0);
+        }
+        let translated = crate::native_characters::translate(
+            origin,
+            &self.state.native_character_authority,
+            VIRTUAL_KEY(wparam.loword()),
+            u32::from(lparam.hiword() & 0xff),
+        );
+        if let Ok(translation) = &translated {
+            NATIVE_CHARACTERS.with(|state| {
+                let mut next = state.get();
+                next.native_translated(translation);
+                state.set(next);
+            });
+        }
+        if !origin.is_current(&self.state.native_character_authority) {
+            return Some(0);
+        }
+        match translated {
+            // The layout keeps the dead key for the next key, as it does for
+            // TranslateMessage; nothing is typed yet.
+            Ok(crate::native_characters::Translation::DeadKey) => (),
+            Ok(crate::native_characters::Translation::Text(text)) => {
+                self.with_input_handler(|handler| {
+                    handler.handle_native_characters_if(origin.target, Ok(&text), || {
+                        origin.is_current(&self.state.native_character_authority)
+                    })
+                });
+            }
+            Err(error) => {
+                self.with_input_handler(|handler| {
+                    handler.handle_native_characters_if(origin.target, Err(error), || {
+                        origin.is_current(&self.state.native_character_authority)
+                    })
+                });
+            }
+        }
+        // Both pumps call WM_GPUI_KEYDOWN before TranslateMessage. The selected
+        // target consumes this key even on failure; a second translation could
+        // change the dead-key state again or insert text twice.
+        Some(0)
+    }
+
     fn handle_keyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
-        let Some(input) =
+        let Some((input, _)) =
             handle_key_event(wparam, lparam, &self.state, |keystroke, _, metadata| {
                 PlatformInput::KeyUp(KeyUpEvent {
                     physical_key: physical_key_from_lparam(lparam),
@@ -1611,6 +1785,11 @@ impl WindowsWindowInner {
     }
 
     fn handle_input_language_changed(&self) -> Option<isize> {
+        NATIVE_CHARACTERS.with(|state| {
+            let mut next = state.get();
+            next.dead_key_pending = false;
+            state.set(next);
+        });
         self.state.pending_surrogate.set(None);
         unsafe {
             PostMessageW(
@@ -1848,7 +2027,7 @@ fn handle_key_event<F>(
     lparam: LPARAM,
     state: &WindowsWindowState,
     f: F,
-) -> Option<PlatformInput>
+) -> Option<(PlatformInput, bool)>
 where
     F: FnOnce(Keystroke, bool, KeyEventMetadata) -> PlatformInput,
 {
@@ -1865,10 +2044,13 @@ where
                 return None;
             }
             state.last_reported_modifiers.set(Some(modifiers));
-            Some(PlatformInput::ModifiersChanged(ModifiersChangedEvent {
-                modifiers,
-                capslock: current_capslock(),
-            }))
+            Some((
+                PlatformInput::ModifiersChanged(ModifiersChangedEvent {
+                    modifiers,
+                    capslock: current_capslock(),
+                }),
+                false,
+            ))
         }
         VK_PACKET | VK_PROCESSKEY => None,
         VK_CAPITAL => {
@@ -1881,10 +2063,13 @@ where
                 return None;
             }
             state.last_reported_capslock.set(Some(capslock));
-            Some(PlatformInput::ModifiersChanged(ModifiersChangedEvent {
-                modifiers,
-                capslock,
-            }))
+            Some((
+                PlatformInput::ModifiersChanged(ModifiersChangedEvent {
+                    modifiers,
+                    capslock,
+                }),
+                false,
+            ))
         }
         vkey => {
             // Keep native layout facts separate from shortcut normalization.
@@ -1903,8 +2088,12 @@ where
                 caps_lock: current_capslock().on,
                 num_lock: unsafe { GetKeyState(VK_NUMLOCK.0 as i32) & 1 } != 0,
             };
-            let keystroke = parse_normal_key(vkey, lparam, modifiers)?;
-            Some(f(keystroke.0, keystroke.1, metadata))
+            let (keystroke, prefer_character_input, dead_key) =
+                parse_normal_key(vkey, lparam, modifiers)?;
+            let prefer_character_input = NATIVE_CHARACTERS
+                .get()
+                .prefers_text(keystroke.key_char.is_some(), prefer_character_input);
+            Some((f(keystroke, prefer_character_input, metadata), dead_key))
         }
     }
 }
@@ -1964,8 +2153,8 @@ fn parse_normal_key(
     vkey: VIRTUAL_KEY,
     lparam: LPARAM,
     mut modifiers: Modifiers,
-) -> Option<(Keystroke, bool)> {
-    let (key_char, prefer_character_input) = process_key(vkey, lparam.hiword());
+) -> Option<(Keystroke, bool, bool)> {
+    let (key_char, prefer_character_input, dead_key) = process_key(vkey, lparam.hiword());
 
     let key = parse_immutable(vkey).or_else(|| {
         let scan_code = lparam.hiword() & 0xFF;
@@ -1979,14 +2168,15 @@ fn parse_normal_key(
             key_char,
         },
         prefer_character_input,
+        dead_key,
     ))
 }
 
-fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
+fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool, bool) {
     let mut keyboard_state = [0u8; 256];
     unsafe {
         if GetKeyboardState(&mut keyboard_state).is_err() {
-            return (None, false);
+            return (None, false, false);
         }
     }
 
@@ -2002,7 +2192,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
     };
 
     if result_c == 0 {
-        return (None, false);
+        return (None, false, false);
     }
 
     let c = &buffer_c[..result_c.unsigned_abs() as usize];
@@ -2011,11 +2201,11 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
         .filter(|s| !s.is_empty() && !s.chars().next().unwrap().is_control());
 
     if result_c < 0 {
-        return (key_char, true);
+        return (key_char, true, true);
     }
 
     if key_char.is_none() {
-        return (None, false);
+        return (None, false, false);
     }
 
     // Workaround for some bug that makes the compiler think keyboard_state is still zeroed out
@@ -2027,7 +2217,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
 
     let has_modifiers = ctrl_down || alt_down || win_down;
     if !has_modifiers {
-        return (key_char, false);
+        return (key_char, false, false);
     }
 
     let mut state_no_modifiers = keyboard_state;
@@ -2055,6 +2245,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
     (
         key_char,
         result_c != result_c_no_modifiers || c != c_no_modifiers,
+        false,
     )
 }
 
@@ -2201,7 +2392,10 @@ mod physical_key_tests {
 
 #[cfg(test)]
 mod native_window_input_tests {
-    use super::{NativeModalLoops, cancel_marked_text, decode_character, mouse_activate_result};
+    use super::{
+        NativeCharacterState, NativeModalLoops, cancel_marked_text, decode_character,
+        mouse_activate_result,
+    };
 
     #[test]
     fn utf16_pairs_cannot_cross_focus_or_text_acceptance_boundaries() {
@@ -2272,5 +2466,32 @@ mod native_window_input_tests {
         // end-composition message must leave the document's selection alone.
         cancel_marked_text(None, |_| panic!("cancelled committed text"));
         cancel_marked_text(Some(0..0), |_| panic!("cancelled an empty composition"));
+    }
+
+    #[test]
+    fn a_dead_key_is_drained_by_ascii_text_but_not_by_remote_shortcuts() {
+        let mut state = NativeCharacterState::default();
+        assert!(!state.prefers_text(true, false));
+        state.key_dispatched(true, true, true);
+        assert!(!state.prefers_text(true, false));
+        state.key_dispatched(true, true, false);
+        assert!(state.prefers_text(true, false));
+        assert!(!state.prefers_text(false, false));
+        state.key_dispatched(false, false, true);
+        assert!(state.prefers_text(true, false));
+        state.key_dispatched(true, false, false);
+        assert!(!state.prefers_text(true, false));
+        assert!(state.prefers_text(true, true));
+    }
+
+    #[test]
+    fn a_native_dead_key_sends_the_next_text_key_to_the_translator_that_holds_it() {
+        use crate::native_characters::Translation;
+        let mut state = NativeCharacterState::default();
+        state.native_translated(&Translation::DeadKey);
+        assert!(state.prefers_text(true, false));
+        assert!(!state.prefers_text(false, false));
+        state.native_translated(&Translation::Text("é".into()));
+        assert!(!state.prefers_text(true, false));
     }
 }

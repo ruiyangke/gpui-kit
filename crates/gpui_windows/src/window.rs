@@ -129,6 +129,7 @@ pub struct WindowsWindowState {
     pub input_handler: Cell<Option<PlatformInputHandler>>,
     pub ime_enabled: Cell<bool>,
     pub pending_surrogate: Cell<Option<(u16, (u64, u64))>>,
+    pub(crate) native_character_authority: crate::native_characters::Authority,
     pub last_reported_modifiers: Cell<Option<Modifiers>>,
     pub last_reported_capslock: Cell<Option<Capslock>>,
     pub hovered: Cell<bool>,
@@ -258,6 +259,7 @@ impl WindowsWindowState {
             input_handler: Cell::new(input_handler),
             ime_enabled: Cell::new(true),
             pending_surrogate: Cell::new(pending_surrogate),
+            native_character_authority: crate::native_characters::Authority::new(hwnd),
             last_reported_modifiers: Cell::new(last_reported_modifiers),
             last_reported_capslock: Cell::new(last_reported_capslock),
             hovered: Cell::new(hovered),
@@ -592,6 +594,7 @@ impl WindowsWindowInner {
 pub(crate) struct Callbacks {
     pub(crate) request_frame: Cell<Option<Box<dyn FnMut(RequestFrameOptions)>>>,
     pub(crate) input: Cell<Option<Box<dyn FnMut(PlatformInput) -> DispatchEventResult>>>,
+    pub(crate) prepare_key_input: Cell<Option<Box<dyn FnMut(bool) -> bool>>>,
     pub(crate) active_status_change: Cell<Option<Box<dyn FnMut(bool)>>>,
     pub(crate) native_activation: RefCell<Option<Rc<dyn Fn(NativeWindowActivation)>>>,
     pub(crate) visibility_change: Cell<Option<Box<dyn FnMut(WindowVisibility)>>>,
@@ -832,6 +835,7 @@ impl WindowsWindowInner {
 
 impl Drop for WindowsWindow {
     fn drop(&mut self) {
+        self.0.state.native_character_authority.retire();
         self.0.state.closing.set(true);
         self.0.retire_native_activation();
         self.0.state.resize_constraint.borrow_mut().take();
@@ -1545,6 +1549,10 @@ impl PlatformWindow for WindowsWindow {
 
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
         self.state.callbacks.input.set(Some(callback));
+    }
+
+    fn on_prepare_key_input(&self, callback: Box<dyn FnMut(bool) -> bool>) {
+        self.state.callbacks.prepare_key_input.set(Some(callback));
     }
 
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>) {

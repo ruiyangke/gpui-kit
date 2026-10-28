@@ -12,6 +12,7 @@ mod dispatcher;
 mod display;
 mod events;
 mod keyboard;
+mod native_characters;
 mod native_resize;
 mod platform;
 mod system_notifications;

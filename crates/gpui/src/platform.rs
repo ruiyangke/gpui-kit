@@ -1340,6 +1340,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     }
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>);
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>);
+    /// Prepare the current painted handler before native key-down capture.
+    /// The flag distinguishes a key-down event from a modifier-only update.
+    /// Return false if the window can no longer prepare an input target.
+    #[cfg(target_os = "windows")]
+    fn on_prepare_key_input(&self, _callback: Box<dyn FnMut(bool) -> bool>) {}
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>);
     /// Registers the callback invoked when [`Self::visibility`] changes. Only
     /// transitions are reported; the callback runs on the main thread outside
@@ -2336,6 +2341,74 @@ impl PlatformInputHandler {
             .flatten()
     }
 
+    /// A separate opt-in target for layout characters without an IME document.
+    #[cfg(target_os = "windows")]
+    pub fn accepts_native_characters(&mut self, window: &mut Window, cx: &mut App) -> bool {
+        window.is_window_active()
+            && window.focus.is_some()
+            && self.handler.native_character_context(window, cx).is_some()
+    }
+
+    /// Capture the active handler's focus and logical target generations.
+    #[cfg(target_os = "windows")]
+    pub fn native_character_target(&mut self) -> Option<(u64, u64)> {
+        self.cx
+            .update(|window, cx| {
+                if !window.is_window_active() || window.focus.is_none() {
+                    return None;
+                }
+                self.handler
+                    .native_character_context(window, cx)
+                    .map(|context| (window.focus_generation, context))
+            })
+            .ok()
+            .flatten()
+    }
+
+    /// Reconcile the captured target before delivering a synchronous translation.
+    #[cfg(target_os = "windows")]
+    pub fn handle_native_characters(
+        &mut self,
+        target: (u64, u64),
+        text: Result<&str, &str>,
+    ) -> bool {
+        self.handle_native_characters_if(target, text, || true)
+    }
+
+    /// Recheck native authority after the handler's context query, which can
+    /// synchronously change focus. No application callback runs between this
+    /// final guard and text or error delivery.
+    #[cfg(target_os = "windows")]
+    pub fn handle_native_characters_if(
+        &mut self,
+        target: (u64, u64),
+        text: Result<&str, &str>,
+        is_current: impl FnOnce() -> bool,
+    ) -> bool {
+        self.cx
+            .update(|window, cx| {
+                if !window.is_window_active()
+                    || window.focus.is_none()
+                    || window.focus_generation != target.0
+                {
+                    return false;
+                }
+                let context = self.handler.native_character_context(window, cx);
+                if context != Some(target.1)
+                    || !window.is_window_active()
+                    || window.focus.is_none()
+                    || window.focus_generation != target.0
+                    || !is_current()
+                {
+                    return false;
+                }
+                self.handler
+                    .handle_native_characters(target.1, text, window, cx);
+                true
+            })
+            .unwrap_or(false)
+    }
+
     /// See [`InputHandler::prefers_ime_for_printable_keys`].
     ///
     /// This is not a pure delegation to the handler: while a multi-stroke binding is pending this
@@ -2392,6 +2465,27 @@ pub trait InputHandler: 'static {
     /// Windows uses this to fence UTF-16 fragments across context changes.
     fn text_input_context_generation(&mut self, _window: &mut Window, _cx: &mut App) -> u64 {
         0
+    }
+
+    /// Opt into Windows layout-character delivery without enabling IMM.
+    /// The generation must change whenever the input target becomes stale,
+    /// including an unavailable target followed by the same logical target.
+    /// Ordinary text handlers should retain the default and use the IME path.
+    #[cfg(target_os = "windows")]
+    fn native_character_context(&mut self, _window: &mut Window, _cx: &mut App) -> Option<u64> {
+        None
+    }
+
+    /// Receive one native translation, or its failure, for the captured target.
+    /// This does not describe a remote document or an IME composition.
+    #[cfg(target_os = "windows")]
+    fn handle_native_characters(
+        &mut self,
+        _context: u64,
+        _text: Result<&str, &str>,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) {
     }
 
     /// Get the range of the user's currently selected text, if any
