@@ -171,6 +171,7 @@ pub struct WindowsWindowState {
 
 pub(crate) struct WindowsWindowInner {
     pub(crate) local_file_drop: crate::file_drop::LocalFileDrop,
+    pub(crate) native_drag: Rc<crate::native_drag::Authority>,
     is_popup: bool,
     pub(crate) mouse_passthrough: Cell<bool>,
     ole_drop_registered: Cell<bool>,
@@ -472,6 +473,7 @@ impl WindowsWindowInner {
 
         Ok(Rc::new(Self {
             local_file_drop: crate::file_drop::LocalFileDrop::new(context.local_file_drop),
+            native_drag: crate::native_drag::Authority::new(hwnd),
             is_popup: context.is_popup,
             mouse_passthrough: Cell::new(context.mouse_passthrough),
             ole_drop_registered: Cell::new(false),
@@ -844,6 +846,7 @@ impl WindowsWindowInner {
 
 impl Drop for WindowsWindow {
     fn drop(&mut self) {
+        self.0.native_drag.retire();
         self.0.state.native_character_authority.retire();
         self.0.state.closing.set(true);
         self.0.local_file_drop.retire(self.0.hwnd);
@@ -1000,6 +1003,9 @@ impl PlatformWindow for WindowsWindow {
         self.0
             .local_file_drop
             .enable(self.0.hwnd, enabled && !self.0.state.closing.get());
+    }
+    fn capture_native_drag_gesture(&self) -> Option<NativeDragGesture> {
+        self.0.native_drag.capture()
     }
     fn bounds(&self) -> Bounds<Pixels> {
         self.state.bounds()

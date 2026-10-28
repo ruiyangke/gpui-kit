@@ -185,6 +185,7 @@ impl WindowsWindowInner {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        self.native_drag.observe(msg, wparam, lparam);
         // Native focus may leave and return before GPUI's deferred observers run.
         self.state
             .native_character_authority
@@ -911,6 +912,8 @@ impl WindowsWindowInner {
             click_count,
             first_mouse: false,
         });
+        let _native_drag_dispatch = (button == MouseButton::Left)
+            .then(|| self.native_drag.begin_left_down());
         let handled = !func(input).propagate;
         self.state.callbacks.input.set(Some(func));
 

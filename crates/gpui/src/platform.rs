@@ -2,6 +2,8 @@ mod app_menu;
 mod keyboard;
 mod keystroke;
 mod platform_info;
+#[cfg(windows)]
+mod native_drag;
 
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 #[expect(missing_docs)]
@@ -82,6 +84,8 @@ use uuid::Uuid;
 pub use app_menu::*;
 pub use keyboard::*;
 pub use keystroke::*;
+#[cfg(windows)]
+pub use native_drag::{NativeDragGesture, NativeDragTracking};
 
 /// Whether the platform is presenting a window's frames.
 ///
@@ -1325,6 +1329,12 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// Toggle local-file admission, invalidating queued events when disabled.
     #[cfg(windows)]
     fn set_native_file_drop_enabled(&self, _enabled: bool) {}
+
+    /// Capture one genuine Windows left-button press during its native dispatch.
+    #[cfg(windows)]
+    fn capture_native_drag_gesture(&self) -> Option<NativeDragGesture> {
+        None
+    }
 
     fn scale_factor(&self) -> f32;
     fn appearance(&self) -> WindowAppearance;

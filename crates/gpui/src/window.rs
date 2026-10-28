@@ -3094,6 +3094,14 @@ impl Window {
         self.platform_window.set_native_file_drop_enabled(enabled);
     }
 
+    /// Retain one genuine Windows left-button press from its mouse-down handler.
+    /// Later claim it outside the input handler, after asynchronous drag preparation.
+    /// This does not start a native drag or change GPUI's active drag.
+    #[cfg(windows)]
+    pub fn capture_native_drag_gesture(&self) -> Option<crate::NativeDragGesture> {
+        self.platform_window.capture_native_drag_gesture()
+    }
+
     /// Toggle zoom on the window.
     pub fn zoom_window(&self) {
         self.platform_window.zoom();

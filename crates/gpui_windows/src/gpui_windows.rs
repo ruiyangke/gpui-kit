@@ -14,6 +14,7 @@ mod events;
 mod file_drop;
 mod keyboard;
 mod native_characters;
+mod native_drag;
 mod native_resize;
 mod platform;
 mod system_notifications;
