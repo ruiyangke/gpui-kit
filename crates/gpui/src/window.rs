@@ -1230,6 +1230,8 @@ pub struct Window {
     pub(crate) display_observers: SubscriberSet<(), AnyObserver>,
     is_resizable: bool,
     is_minimizable: bool,
+    #[cfg(windows)]
+    maximizable: Option<bool>,
     sprite_atlas: Arc<dyn PlatformAtlas>,
     text_system: Arc<WindowTextSystem>,
     text_rendering_mode: Rc<Cell<TextRenderingMode>>,
@@ -1619,6 +1621,8 @@ impl Window {
         let mut platform_window = cx.platform.open_window(
             handle,
             WindowParams {
+                #[cfg(windows)]
+                window_decorations: window_decorations.unwrap_or(WindowDecorations::Server),
                 bounds: window_bounds.get_bounds(),
                 titlebar,
                 kind,
@@ -2142,6 +2146,8 @@ impl Window {
             display_observers: SubscriberSet::new(),
             is_resizable,
             is_minimizable,
+            #[cfg(windows)]
+            maximizable: None,
             sprite_atlas,
             text_system,
             text_rendering_mode: cx.text_rendering_mode.clone(),
@@ -2491,7 +2497,8 @@ impl Window {
         self.platform_window.is_maximized()
     }
 
-    /// request a certain window decoration (Wayland)
+    /// Request client or server decorations on platforms that support them.
+    /// Windows applies runtime frame changes after the current update.
     pub fn request_decorations(&self, decorations: WindowDecorations) {
         self.platform_window.request_decorations(decorations);
     }
@@ -3006,6 +3013,16 @@ impl Window {
         }
     }
 
+    /// Replace the Windows native resize policy synchronously.
+    ///
+    /// The selector runs inside Win32 sizing messages and must not access GPUI
+    /// or native windows. The HWND releases the snapshot when replaced or closed.
+    #[cfg(windows)]
+    pub fn set_native_resize_constraint(&self, constraint: Option<crate::NativeResizeConstraint>) {
+        self.platform_window
+            .set_native_resize_constraint(constraint);
+    }
+
     /// Toggle zoom on the window.
     pub fn zoom_window(&self) {
         self.platform_window.zoom();
@@ -3016,7 +3033,7 @@ impl Window {
         self.platform_window.show_window_menu(position)
     }
 
-    /// Handle window movement for Linux and macOS.
+    /// Start native window movement.
     /// Tells the compositor to take control of window movement (Wayland and X11)
     ///
     /// Events may not be received during a move operation.
@@ -3045,9 +3062,57 @@ impl Window {
         self.is_resizable
     }
 
+    /// Update resize permission and the platform's native window controls.
+    #[cfg(target_os = "windows")]
+    pub fn set_resizable(&mut self, resizable: bool) {
+        if self.is_resizable != resizable {
+            self.is_resizable = resizable;
+            self.platform_window.set_resizable(resizable);
+        }
+    }
+
     /// Returns whether this window is minimizable.
     pub fn is_minimizable(&self) -> bool {
         self.is_minimizable
+    }
+
+    /// Update minimize permission and the platform's native window controls.
+    #[cfg(target_os = "windows")]
+    pub fn set_minimizable(&mut self, minimizable: bool) {
+        if self.is_minimizable != minimizable {
+            self.is_minimizable = minimizable;
+            self.platform_window.set_minimizable(minimizable);
+        }
+    }
+
+    /// Set Windows maximize permission independently from resize permission.
+    /// Until explicitly set, maximize permission follows resize permission.
+    #[cfg(windows)]
+    pub fn set_maximizable(&mut self, maximizable: bool) {
+        if self.maximizable != Some(maximizable) {
+            self.maximizable = Some(maximizable);
+            self.platform_window.set_maximizable(maximizable);
+        }
+    }
+
+    /// Whether Windows offers maximize through its native controls.
+    #[cfg(windows)]
+    pub fn is_maximizable(&self) -> bool {
+        self.maximizable.unwrap_or(self.is_resizable)
+    }
+
+    /// Request an absolute Windows maximize state without toggling a pending request.
+    /// Fullscreen, minimized, and interactively resizing windows retain their
+    /// state; callers defer until restored. Visible restore does not activate.
+    #[cfg(windows)]
+    pub fn set_maximized(&self, maximized: bool) {
+        self.platform_window.set_maximized(maximized);
+    }
+
+    /// Whether the platform is running an interactive window move or resize.
+    #[cfg(target_os = "windows")]
+    pub fn is_in_live_resize(&self) -> bool {
+        self.platform_window.is_in_live_resize()
     }
 
     /// Returns the controls supported by the platform.

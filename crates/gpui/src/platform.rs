@@ -1220,6 +1220,28 @@ pub enum TextInputStateChange {
     ContentChanged,
 }
 
+/// Immutable client-size policy used by the Windows native sizing loop.
+///
+/// The selector receives and returns logical client dimensions. It must be
+/// bounded and pure: no GPUI access, native calls, window capture, or mutation.
+/// Returning `None` refuses that resize. Minimum and maximum must be finite,
+/// positive, and ordered; invalid values also refuse resizing.
+#[cfg(windows)]
+#[derive(Clone)]
+pub enum NativeResizeConstraint {
+    /// Keep the HWND's current size during an interactive resize.
+    Fixed,
+    /// Select a legal client size within the supplied bounds.
+    Constrained {
+        /// Smallest legal logical client size.
+        minimum: Size<Pixels>,
+        /// Largest legal logical client size.
+        maximum: Size<Pixels>,
+        /// Nearest legal logical client size, or refusal.
+        select: Rc<dyn Fn(Size<Pixels>) -> Option<Size<Pixels>>>,
+    },
+}
+
 #[expect(missing_docs)]
 pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn bounds(&self) -> Bounds<Pixels>;
@@ -1247,6 +1269,9 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         false
     }
     fn resize(&mut self, size: Size<Pixels>);
+    /// Replace the immutable native sizing policy; `None` restores platform defaults.
+    #[cfg(windows)]
+    fn set_native_resize_constraint(&self, _constraint: Option<NativeResizeConstraint>) {}
     fn scale_factor(&self) -> f32;
     fn appearance(&self) -> WindowAppearance;
     fn display(&self) -> Option<Rc<dyn PlatformDisplay>>;
@@ -1365,6 +1390,15 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         false
     }
     fn start_window_resize(&self, _edge: ResizeEdge) {}
+    fn set_resizable(&self, _resizable: bool) {}
+    fn set_minimizable(&self, _minimizable: bool) {}
+    #[cfg(windows)]
+    fn set_maximizable(&self, _maximizable: bool) {}
+    #[cfg(windows)]
+    fn set_maximized(&self, _maximized: bool) {}
+    fn is_in_live_resize(&self) -> bool {
+        false
+    }
     fn set_exclusive_zone(&self, _zone: Pixels) {}
     #[cfg(all(target_os = "linux", feature = "wayland"))]
     fn set_exclusive_edge(&self, _edge: layer_shell::Anchor) {}
@@ -2640,7 +2674,9 @@ pub struct WindowOptions {
     /// Window minimum size
     pub window_min_size: Option<Size<Pixels>>,
 
-    /// Whether to use client or server-side decorations on X11 and Wayland.
+    /// Whether to use client or server-side decorations on X11, Wayland and Windows.
+    /// On Windows, Client gives the app the whole window's drawable area and
+    /// retains native resize hit testing and maximized work-area bounds.
     /// The platform may ignore requests it cannot satisfy.
     pub window_decorations: Option<WindowDecorations>,
 
@@ -2665,6 +2701,8 @@ pub struct WindowOptions {
 )]
 #[allow(missing_docs)]
 pub struct WindowParams {
+    #[cfg(windows)]
+    pub window_decorations: WindowDecorations,
     pub bounds: Bounds<Pixels>,
 
     /// The titlebar configuration of the window

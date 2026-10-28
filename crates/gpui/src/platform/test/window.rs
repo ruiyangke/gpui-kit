@@ -313,6 +313,11 @@ impl TestWindow {
 }
 
 impl PlatformWindow for TestWindow {
+    #[cfg(windows)]
+    fn set_native_resize_constraint(&self, _: Option<crate::NativeResizeConstraint>) {
+        // This backend has no HWND or native sizing loop.
+    }
+
     fn visual_viewport_bounds(&self) -> Bounds<Pixels> {
         let state = self.0.lock();
         state
