@@ -21,7 +21,8 @@ use windows::{
         Graphics::Dwm::*,
         Graphics::Gdi::*,
         System::{
-            Com::*, Diagnostics::Debug::MessageBeep, LibraryLoader::*, Ole::*, SystemServices::*,
+            Com::*, Diagnostics::Debug::MessageBeep, LibraryLoader::*, Ole::*,
+            SystemInformation::OSVERSIONINFOW, SystemServices::*,
         },
         UI::{Controls::*, HiDpi::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
     },
@@ -1219,25 +1220,26 @@ impl PlatformWindow for WindowsWindow {
 
         // using Dwm APIs for Mica and MicaAlt backdrops.
         // others follow the set_window_composition_attribute approach
-        match background_appearance {
-            WindowBackgroundAppearance::Opaque => {
-                set_window_composition_attribute(hwnd, None, 0);
-            }
+        let result = match background_appearance {
+            WindowBackgroundAppearance::Opaque => set_window_composition_attribute(hwnd, None, 0),
             WindowBackgroundAppearance::Transparent => {
-                set_window_composition_attribute(hwnd, None, 2);
+                set_window_composition_attribute(hwnd, None, 2)
             }
             WindowBackgroundAppearance::Blurred => {
-                set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
+                set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4)
             }
             WindowBackgroundAppearance::MicaBackdrop => {
                 // DWMSBT_MAINWINDOW => MicaBase
-                dwm_set_window_composition_attribute(hwnd, 2);
+                dwm_set_window_composition_attribute(hwnd, 2)
             }
             WindowBackgroundAppearance::MicaAltBackdrop => {
                 // DWMSBT_TABBEDWINDOW => MicaAlt
-                dwm_set_window_composition_attribute(hwnd, 4);
+                dwm_set_window_composition_attribute(hwnd, 4)
             }
-        }
+        };
+        result
+            .context("Setting native window background appearance")
+            .log_err();
     }
 
     fn minimize(&self) {
@@ -2071,76 +2073,86 @@ fn retrieve_window_placement(
     Ok(placement)
 }
 
-fn dwm_set_window_composition_attribute(hwnd: HWND, backdrop_type: u32) {
-    let mut version = unsafe { std::mem::zeroed() };
-    let status = unsafe { windows::Wdk::System::SystemServices::RtlGetVersion(&mut version) };
+fn dwm_set_window_composition_attribute(hwnd: HWND, backdrop_type: u32) -> Result<bool> {
+    let mut version = OSVERSIONINFOW {
+        dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
+        ..Default::default()
+    };
+    unsafe { windows::Wdk::System::SystemServices::RtlGetVersion(&mut version) }
+        .ok()
+        .context("Querying Windows version for DWM backdrop")?;
 
     // DWMWA_SYSTEMBACKDROP_TYPE is available only on version 22621 or later
-    // using SetWindowCompositionAttributeType as a fallback
-    if !status.is_ok() || version.dwBuildNumber < 22621 {
-        return;
+    if version.dwBuildNumber < 22621 {
+        return Ok(false);
     }
 
     unsafe {
-        let result = DwmSetWindowAttribute(
+        DwmSetWindowAttribute(
             hwnd,
             DWMWA_SYSTEMBACKDROP_TYPE,
             &backdrop_type as *const _ as *const _,
             std::mem::size_of_val(&backdrop_type) as u32,
-        );
-
-        if !result.is_ok() {
-            return;
-        }
+        )
+        .context("Setting DWM system backdrop")?;
     }
+    Ok(true)
 }
 
-fn set_window_composition_attribute(hwnd: HWND, color: Option<Color>, state: u32) {
-    let mut version = unsafe { std::mem::zeroed() };
-    let status = unsafe { windows::Wdk::System::SystemServices::RtlGetVersion(&mut version) };
+fn set_window_composition_attribute(hwnd: HWND, color: Option<Color>, state: u32) -> Result<bool> {
+    let mut version = OSVERSIONINFOW {
+        dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
+        ..Default::default()
+    };
+    unsafe { windows::Wdk::System::SystemServices::RtlGetVersion(&mut version) }
+        .ok()
+        .context("Querying Windows version for composition attribute")?;
 
-    if !status.is_ok() || version.dwBuildNumber < 17763 {
-        return;
+    if version.dwBuildNumber < 17763 {
+        return Ok(false);
     }
 
     unsafe {
         type SetWindowCompositionAttributeType =
             unsafe extern "system" fn(HWND, *mut WINDOWCOMPOSITIONATTRIBDATA) -> BOOL;
         let module_name = PCSTR::from_raw(c"user32.dll".as_ptr() as *const u8);
-        if let Some(user32) = GetModuleHandleA(module_name)
-            .context("Unable to get user32.dll handle")
-            .log_err()
-        {
-            let func_name = PCSTR::from_raw(c"SetWindowCompositionAttribute".as_ptr() as *const u8);
-            let Some(raw_set_window_composition_attribute) = GetProcAddress(user32, func_name)
-            else {
-                return;
-            };
-            let set_window_composition_attribute: SetWindowCompositionAttributeType =
-                std::mem::transmute(raw_set_window_composition_attribute);
-            let mut color = color.unwrap_or_default();
-            let is_acrylic = state == 4;
-            if is_acrylic && color.3 == 0 {
-                color.3 = 1;
-            }
-            let accent = AccentPolicy {
-                accent_state: state,
-                accent_flags: if is_acrylic { 0 } else { 2 },
-                gradient_color: (color.0 as u32)
-                    | ((color.1 as u32) << 8)
-                    | ((color.2 as u32) << 16)
-                    | ((color.3 as u32) << 24),
-                animation_id: 0,
-            };
-            let mut data = WINDOWCOMPOSITIONATTRIBDATA {
-                attrib: 0x13,
-                pv_data: &accent as *const _ as *mut _,
-                cb_data: std::mem::size_of::<AccentPolicy>(),
-            };
-            let _ = set_window_composition_attribute(hwnd, &mut data as *mut _ as _);
+        let user32 = GetModuleHandleA(module_name).context("Unable to get user32.dll handle")?;
+        let func_name = PCSTR::from_raw(c"SetWindowCompositionAttribute".as_ptr() as *const u8);
+        let Some(raw_set_window_composition_attribute) = GetProcAddress(user32, func_name) else {
+            return Ok(false);
+        };
+        let set_window_composition_attribute: SetWindowCompositionAttributeType =
+            std::mem::transmute(raw_set_window_composition_attribute);
+        let mut color = color.unwrap_or_default();
+        let is_acrylic = state == 4;
+        if is_acrylic && color.3 == 0 {
+            color.3 = 1;
         }
+        let accent = AccentPolicy {
+            accent_state: state,
+            accent_flags: if is_acrylic { 0 } else { 2 },
+            gradient_color: (color.0 as u32)
+                | ((color.1 as u32) << 8)
+                | ((color.2 as u32) << 16)
+                | ((color.3 as u32) << 24),
+            animation_id: 0,
+        };
+        let mut data = WINDOWCOMPOSITIONATTRIBDATA {
+            attrib: 0x13,
+            pv_data: &accent as *const _ as *mut _,
+            cb_data: std::mem::size_of::<AccentPolicy>(),
+        };
+        anyhow::ensure!(
+            set_window_composition_attribute(hwnd, &mut data as *mut _ as _).as_bool(),
+            "SetWindowCompositionAttribute rejected accent state {state}",
+        );
     }
+    Ok(true)
 }
+
+#[cfg(test)]
+#[path = "window_appearance_tests.rs"]
+mod window_appearance_tests;
 
 // When the platform title bar is hidden, Windows may think that our application is meant to appear 'fullscreen'
 // and will stop the taskbar from appearing on top of our window. Prevent this.
