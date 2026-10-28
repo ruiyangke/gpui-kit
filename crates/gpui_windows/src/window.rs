@@ -128,7 +128,7 @@ pub struct WindowsWindowState {
     pub frame_signal: Arc<PlatformFrameSignal>,
     pub input_handler: Cell<Option<PlatformInputHandler>>,
     pub ime_enabled: Cell<bool>,
-    pub pending_surrogate: Cell<Option<u16>>,
+    pub pending_surrogate: Cell<Option<(u16, (u64, u64))>>,
     pub last_reported_modifiers: Cell<Option<Modifiers>>,
     pub last_reported_capslock: Cell<Option<Capslock>>,
     pub hovered: Cell<bool>,

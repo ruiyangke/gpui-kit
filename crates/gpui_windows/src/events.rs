@@ -57,6 +57,39 @@ impl NativeModalLoops {
     }
 }
 
+fn cancel_marked_text(
+    marked: Option<std::ops::Range<usize>>,
+    replace: impl FnOnce(std::ops::Range<usize>),
+) {
+    if let Some(range) = marked.filter(|range| !range.is_empty()) {
+        replace(range);
+    }
+}
+
+fn decode_character(
+    pending: &mut Option<(u16, (u64, u64))>,
+    code: u16,
+    generation: Option<(u64, u64)>,
+) -> Option<String> {
+    let previous = pending.take();
+    let generation = generation?;
+    match code {
+        0xD800..=0xDBFF => {
+            *pending = Some((code, generation));
+            None
+        }
+        0xDC00..=0xDFFF => {
+            let (high, previous_generation) = previous?;
+            (generation == previous_generation)
+                .then(|| String::from_utf16(&[high, code]).ok())
+                .flatten()
+        }
+        _ => char::from_u32(code as u32)
+            .filter(|character| !character.is_control())
+            .map(|character| character.to_string()),
+    }
+}
+
 fn mouse_activate_result(style: u32) -> isize {
     if style & WS_EX_NOACTIVATE.0 != 0 {
         MA_NOACTIVATE as isize
@@ -136,6 +169,10 @@ impl WindowsWindowInner {
                 Some(0)
             }
             WM_ACTIVATE => self.handle_activate_msg(wparam, lparam),
+            WM_KILLFOCUS => {
+                self.state.pending_surrogate.set(None);
+                None
+            }
             WM_CREATE => self.handle_create_msg(handle),
             WM_MOVE => self.handle_move_msg(handle, lparam),
             WM_SIZE => self.handle_size_msg(wparam, lparam),
@@ -205,6 +242,10 @@ impl WindowsWindowInner {
             WM_CHAR => self.handle_char_msg(wparam),
             WM_IME_STARTCOMPOSITION => self.handle_ime_position(handle),
             WM_IME_COMPOSITION => self.handle_ime_composition(handle, lparam),
+            WM_IME_ENDCOMPOSITION => {
+                self.cancel_ime_composition();
+                None
+            }
             WM_SETCURSOR => self.handle_set_cursor(handle, lparam),
             WM_SETTINGCHANGE => self.handle_system_settings_changed(handle, wparam, lparam),
             WM_INPUTLANGCHANGE => self.handle_input_language_changed(),
@@ -638,7 +679,13 @@ impl WindowsWindowInner {
     }
 
     fn handle_char_msg(&self, wparam: WPARAM) -> Option<isize> {
-        let input = self.parse_char_message(wparam)?;
+        let generation = self
+            .with_input_handler(|input_handler| input_handler.text_input_generation())
+            .flatten();
+        let mut pending = self.state.pending_surrogate.take();
+        let input = decode_character(&mut pending, wparam.loword(), generation);
+        self.state.pending_surrogate.set(pending);
+        let input = input?;
         self.with_input_handler(|input_handler| {
             input_handler.replace_text_in_range(None, &input);
         });
@@ -865,6 +912,9 @@ impl WindowsWindowInner {
         let ime_enabled = self
             .with_input_handler(|input_handler| input_handler.query_accepts_text_input())
             .unwrap_or(false);
+        if !ime_enabled {
+            self.state.pending_surrogate.set(None);
+        }
         if ime_enabled == self.state.ime_enabled.get() {
             return;
         }
@@ -899,11 +949,7 @@ impl WindowsWindowInner {
     fn handle_ime_composition_inner(&self, ctx: HIMC, lparam: LPARAM) -> Option<isize> {
         let lparam = lparam.0 as u32;
         if lparam == 0 {
-            // Japanese IME may send this message with lparam = 0, which indicates that
-            // there is no composition string.
-            self.with_input_handler(|input_handler| {
-                input_handler.replace_text_in_range(None, "");
-            })?;
+            self.cancel_ime_composition();
             Some(0)
         } else {
             if lparam & GCS_RESULTSTR.0 > 0 {
@@ -940,6 +986,17 @@ impl WindowsWindowInner {
             // currently, we don't care other stuff
             None
         }
+    }
+
+    fn cancel_ime_composition(&self) {
+        self.with_input_handler(|input_handler| {
+            // After a result was committed there may be a selected document
+            // range. Cancellation may remove only the remaining marked text.
+            let marked = input_handler.marked_text_range();
+            cancel_marked_text(marked, |range| {
+                input_handler.replace_text_in_range(Some(range), "");
+            });
+        });
     }
 
     fn handle_calc_client_size(
@@ -1007,6 +1064,7 @@ impl WindowsWindowInner {
 
         if !activated {
             this.state.cursor_visible.store(true, Ordering::Relaxed);
+            this.state.pending_surrogate.set(None);
         }
 
         // When the window is activated (gains focus), reset the modifier tracking state.
@@ -1553,6 +1611,7 @@ impl WindowsWindowInner {
     }
 
     fn handle_input_language_changed(&self) -> Option<isize> {
+        self.state.pending_surrogate.set(None);
         unsafe {
             PostMessageW(
                 Some(self.platform_window_handle),
@@ -1700,38 +1759,6 @@ impl WindowsWindowInner {
         Some(0)
     }
 
-    #[inline]
-    fn parse_char_message(&self, wparam: WPARAM) -> Option<String> {
-        let code_point = wparam.loword();
-
-        // https://www.unicode.org/versions/Unicode16.0.0/core-spec/chapter-3/#G2630
-        match code_point {
-            0xD800..=0xDBFF => {
-                // High surrogate, wait for low surrogate
-                self.state.pending_surrogate.set(Some(code_point));
-                None
-            }
-            0xDC00..=0xDFFF => {
-                if let Some(high_surrogate) = self.state.pending_surrogate.take() {
-                    // Low surrogate, combine with pending high surrogate
-                    String::from_utf16(&[high_surrogate, code_point]).ok()
-                } else {
-                    // Invalid low surrogate without a preceding high surrogate
-                    log::warn!(
-                        "Received low surrogate without a preceding high surrogate: {code_point:x}"
-                    );
-                    None
-                }
-            }
-            _ => {
-                self.state.pending_surrogate.set(None);
-                char::from_u32(code_point as u32)
-                    .filter(|c| !c.is_control())
-                    .map(|c| c.to_string())
-            }
-        }
-    }
-
     /// Clear the hidden flag and restore the cursor immediately
     fn restore_cursor_after_hide(&self) {
         if !self.state.cursor_visible.swap(true, Ordering::Relaxed) {
@@ -1843,7 +1870,7 @@ where
                 capslock: current_capslock(),
             }))
         }
-        VK_PACKET => None,
+        VK_PACKET | VK_PROCESSKEY => None,
         VK_CAPITAL => {
             let capslock = current_capslock();
             if state
@@ -2174,7 +2201,31 @@ mod physical_key_tests {
 
 #[cfg(test)]
 mod native_window_input_tests {
-    use super::{NativeModalLoops, mouse_activate_result};
+    use super::{NativeModalLoops, cancel_marked_text, decode_character, mouse_activate_result};
+
+    #[test]
+    fn utf16_pairs_cannot_cross_focus_or_text_acceptance_boundaries() {
+        let mut pending = None;
+        assert_eq!(decode_character(&mut pending, 0xd83d, Some((4, 0))), None);
+        assert_eq!(
+            decode_character(&mut pending, 0xdc4b, Some((4, 0))),
+            Some("👋".into())
+        );
+        assert_eq!(pending, None);
+        assert_eq!(decode_character(&mut pending, 0xd83d, Some((4, 0))), None);
+        assert_eq!(decode_character(&mut pending, 0xdc4b, Some((5, 0))), None);
+        assert_eq!(decode_character(&mut pending, 0xd83d, Some((5, 0))), None);
+        assert_eq!(decode_character(&mut pending, 0xdc4b, Some((5, 1))), None);
+        assert_eq!(decode_character(&mut pending, 0xd83d, Some((5, 1))), None);
+        assert_eq!(decode_character(&mut pending, 0xdc4b, None), None);
+        assert_eq!(decode_character(&mut pending, 0xdc4b, Some((5, 1))), None);
+        assert_eq!(decode_character(&mut pending, 0xd83d, Some((5, 1))), None);
+        assert_eq!(
+            decode_character(&mut pending, b'a' as u16, Some((5, 1))),
+            Some("a".into())
+        );
+        assert_eq!(decode_character(&mut pending, 0xdc4b, Some((5, 1))), None);
+    }
     use windows::Win32::UI::WindowsAndMessaging::{
         MA_ACTIVATE, MA_NOACTIVATE, WM_ENTERMENULOOP, WM_ENTERSIZEMOVE, WM_EXITMENULOOP,
         WM_EXITSIZEMOVE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
@@ -2208,5 +2259,18 @@ mod native_window_input_tests {
         assert!(!loops.active());
         loops.update(WM_EXITMENULOOP);
         assert!(!loops.active());
+    }
+
+    #[test]
+    fn cancelled_composition_cannot_delete_a_committed_document_selection() {
+        let mut document = "before marked after".to_owned();
+        cancel_marked_text(Some(7..13), |range| {
+            document.replace_range(range, "");
+        });
+        assert_eq!(document, "before  after");
+        // A result commit has already removed the marked range. The following
+        // end-composition message must leave the document's selection alone.
+        cancel_marked_text(None, |_| panic!("cancelled committed text"));
+        cancel_marked_text(Some(0..0), |_| panic!("cancelled an empty composition"));
     }
 }

@@ -2323,6 +2323,19 @@ impl PlatformInputHandler {
             .unwrap_or(false)
     }
 
+    /// Identify the focused Windows text target across native UTF-16 messages.
+    #[cfg(target_os = "windows")]
+    pub fn text_input_generation(&mut self) -> Option<(u64, u64)> {
+        self.cx
+            .update(|window, cx| {
+                let context = self.handler.text_input_context_generation(window, cx);
+                (self.handler.accepts_text_input(window, cx) && window.focus.is_some())
+                    .then_some((window.focus_generation, context))
+            })
+            .ok()
+            .flatten()
+    }
+
     /// See [`InputHandler::prefers_ime_for_printable_keys`].
     ///
     /// This is not a pure delegation to the handler: while a multi-stroke binding is pending this
@@ -2373,6 +2386,14 @@ pub struct UTF16Selection {
 ///
 /// Text offsets and ranges use UTF-16 code units unless stated otherwise.
 pub trait InputHandler: 'static {
+    /// A stable generation for the logical text target behind this handler.
+    /// Increment when that target changes without moving GPUI focus. Geometry
+    /// updates and handler recreation for a new frame must keep it stable.
+    /// Windows uses this to fence UTF-16 fragments across context changes.
+    fn text_input_context_generation(&mut self, _window: &mut Window, _cx: &mut App) -> u64 {
+        0
+    }
+
     /// Get the range of the user's currently selected text, if any
     /// Corresponds to [selectedRange()](https://developer.apple.com/documentation/appkit/nstextinputclient/1438242-selectedrange)
     ///
