@@ -31,6 +31,102 @@ pub(crate) const WM_GPUI_DISPLAYS_CHANGED: u32 = WM_USER + 10;
 
 const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
 
+thread_local! {
+    // TranslateMessage owns the keyboard layout's dead-key state on this
+    // thread. The next text key must reach it even when it produces ASCII.
+    static NATIVE_CHARACTERS: Cell<NativeCharacterState> = const {
+        Cell::new(NativeCharacterState {
+            dead_key_pending: false,
+            ordinary_dead_keys: crate::native_characters::OrdinaryDeadKeys::new(),
+        })
+    };
+}
+
+#[derive(Clone, Copy, Default)]
+struct NativeCharacterState {
+    dead_key_pending: bool,
+    ordinary_dead_keys: crate::native_characters::OrdinaryDeadKeys,
+}
+
+impl NativeCharacterState {
+    fn prefers_text(self, has_text: bool, prefer_character_input: bool) -> bool {
+        prefer_character_input || (self.dead_key_pending && has_text)
+    }
+
+    fn key_dispatched(&mut self, has_text: bool, dead_key: bool, handled: bool) {
+        if !handled && has_text {
+            self.dead_key_pending = dead_key;
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct NativeModalLoops {
+    size_move: bool,
+    menus: u32,
+}
+
+impl NativeModalLoops {
+    pub(crate) fn in_size_move(self) -> bool {
+        self.size_move
+    }
+
+    fn active(self) -> bool {
+        self.size_move || self.menus > 0
+    }
+
+    fn update(&mut self, message: u32) {
+        match message {
+            WM_ENTERSIZEMOVE => self.size_move = true,
+            WM_EXITSIZEMOVE => self.size_move = false,
+            WM_ENTERMENULOOP => self.menus = self.menus.saturating_add(1),
+            WM_EXITMENULOOP => self.menus = self.menus.saturating_sub(1),
+            _ => {}
+        }
+    }
+}
+
+fn cancel_marked_text(
+    marked: Option<std::ops::Range<usize>>,
+    replace: impl FnOnce(std::ops::Range<usize>),
+) {
+    if let Some(range) = marked.filter(|range| !range.is_empty()) {
+        replace(range);
+    }
+}
+
+fn decode_character(
+    pending: &mut Option<(u16, (u64, u64))>,
+    code: u16,
+    generation: Option<(u64, u64)>,
+) -> Option<String> {
+    let previous = pending.take();
+    let generation = generation?;
+    match code {
+        0xD800..=0xDBFF => {
+            *pending = Some((code, generation));
+            None
+        }
+        0xDC00..=0xDFFF => {
+            let (high, previous_generation) = previous?;
+            (generation == previous_generation)
+                .then(|| String::from_utf16(&[high, code]).ok())
+                .flatten()
+        }
+        _ => char::from_u32(code as u32)
+            .filter(|character| !character.is_control())
+            .map(|character| character.to_string()),
+    }
+}
+
+fn mouse_activate_result(style: u32) -> isize {
+    if style & WS_EX_NOACTIVATE.0 != 0 {
+        MA_NOACTIVATE as isize
+    } else {
+        MA_ACTIVATE as isize
+    }
+}
+
 /// Coordinates window draws on the UI thread. Owned by the platform and
 /// shared with every window (like `WindowsPlatformState::cursor_visible`),
 /// because the coordination is inherently cross-window: while window A is
@@ -85,21 +181,68 @@ impl WindowsWindowInner {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
+        self.native_drag.observe(msg, wparam, lparam);
+        // Native focus may leave and return before GPUI's deferred observers run.
+        self.state
+            .native_character_authority
+            .observe(msg, wparam, lparam);
+        // A delayed drop must not target a later geometry or activation, even
+        // if a subsequent message restores the same numerical bounds.
+        if matches!(
+            msg,
+            WM_MOVE
+                | WM_SIZE
+                | WM_DPICHANGED
+                | WM_DISPLAYCHANGE
+                | WM_ACTIVATE
+                | WM_KILLFOCUS
+                | WM_SHOWWINDOW
+                | WM_DESTROY
+                | WM_CLOSE
+        ) {
+            self.local_file_drop.invalidate();
+        }
         let handled = match msg {
+            WM_DROPFILES => {
+                self.handle_local_file_drop(windows::Win32::UI::Shell::HDROP(wparam.0 as *mut _));
+                Some(0)
+            }
             // `DefWindowProc` answers `MA_NOACTIVATE` for a left click on `HTCAPTION`.
             // The activation is only triggered when `DefWindowProc` handles the following `WM_NCLBUTTONDOWN`.
             // The GPUI event is dispatched in between, so a click handler runs while `active_window` is still
             // whichever window was active before the click. If that handler consumes the
             // press, `DefWindowProc` never sees it, so the window is never activated at all.
             // So, let's eagerly activate the window.
-            WM_MOUSEACTIVATE => Some(MA_ACTIVATE as isize),
-            WM_ACTIVATE => self.handle_activate_msg(wparam),
+            WM_MOUSEACTIVATE if self.mouse_passthrough.get() => Some(MA_NOACTIVATE as isize),
+            WM_MOUSEACTIVATE => {
+                let style = unsafe { get_window_long(handle, GWL_EXSTYLE) } as u32;
+                Some(mouse_activate_result(style))
+            }
+            WM_NCHITTEST if self.mouse_passthrough.get() => Some(HTTRANSPARENT as isize),
+            WM_SYSCOMMAND if wparam.0 as u32 & 0xfff0 == SC_MAXIMIZE && !self.is_maximizable() => {
+                Some(0)
+            }
+            WM_ACTIVATE => self.handle_activate_msg(wparam, lparam),
+            WM_KILLFOCUS => {
+                self.state.pending_surrogate.set(None);
+                None
+            }
             WM_CREATE => self.handle_create_msg(handle),
             WM_MOVE => self.handle_move_msg(handle, lparam),
             WM_SIZE => self.handle_size_msg(wparam, lparam),
             WM_GETMINMAXINFO => self.handle_get_min_max_info_msg(lparam),
-            WM_ENTERSIZEMOVE | WM_ENTERMENULOOP => self.handle_size_move_loop(handle),
-            WM_EXITSIZEMOVE | WM_EXITMENULOOP => self.handle_size_move_loop_exit(handle),
+            WM_SIZING => self.handle_sizing_msg(wparam, lparam),
+            WM_ENTERSIZEMOVE | WM_EXITSIZEMOVE | WM_ENTERMENULOOP | WM_EXITMENULOOP => {
+                let mut loops = self.state.modal_loops.get();
+                let was_active = loops.active();
+                loops.update(msg);
+                self.state.modal_loops.set(loops);
+                match (was_active, loops.active()) {
+                    (false, true) => self.handle_size_move_loop(handle),
+                    (true, false) => self.handle_size_move_loop_exit(handle),
+                    _ => None,
+                }
+            }
             WM_TIMER => self.handle_timer_msg(handle, wparam),
             WM_NCCALCSIZE => self.handle_calc_client_size(handle, wparam, lparam),
             WM_DPICHANGED => self.handle_dpi_changed_msg(handle, wparam, lparam),
@@ -151,6 +294,10 @@ impl WindowsWindowInner {
             WM_CHAR => self.handle_char_msg(wparam),
             WM_IME_STARTCOMPOSITION => self.handle_ime_position(handle),
             WM_IME_COMPOSITION => self.handle_ime_composition(handle, lparam),
+            WM_IME_ENDCOMPOSITION => {
+                self.cancel_ime_composition();
+                None
+            }
             WM_SETCURSOR => self.handle_set_cursor(handle, lparam),
             WM_SETTINGCHANGE => self.handle_system_settings_changed(handle, wparam, lparam),
             WM_INPUTLANGCHANGE => self.handle_input_language_changed(),
@@ -203,7 +350,92 @@ impl WindowsWindowInner {
         Some(0)
     }
 
+    fn native_resize_geometry(&self) -> Option<crate::native_resize::Geometry> {
+        let mut outer = RECT::default();
+        let mut client = RECT::default();
+        // SAFETY: these messages are dispatched to this live HWND on its UI thread.
+        unsafe {
+            GetWindowRect(self.native_handle(), &mut outer).ok()?;
+            GetClientRect(self.native_handle(), &mut client).ok()?;
+        }
+        crate::native_resize::Geometry::measure(
+            [outer.left, outer.top, outer.right, outer.bottom],
+            [client.right - client.left, client.bottom - client.top],
+            self.state.decorations.get() == WindowDecorations::Client,
+            unsafe { GetDpiForWindow(self.native_handle()) },
+        )
+    }
+
+    fn native_resize_policy(&self) -> Option<NativeResizeConstraint> {
+        if self.state.closing.get() || self.state.is_fullscreen() {
+            return None;
+        }
+        if !self.is_resizable.get() {
+            return Some(NativeResizeConstraint::Fixed);
+        }
+        // Release the borrow before calling the immutable policy. Native
+        // message delivery can nest even though the selector itself is pure.
+        self.state.resize_constraint.borrow().clone()
+    }
+
+    fn handle_sizing_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
+        if lparam.0 == 0 || self.state.is_maximized() {
+            return None;
+        }
+        let policy = self.native_resize_policy()?;
+        let geometry = self.native_resize_geometry()?;
+        // SAFETY: WM_SIZING supplies a writable screen-coordinate RECT.
+        unsafe {
+            let proposed = &mut *(lparam.0 as *mut RECT);
+            let rect = geometry
+                .constrain(
+                    [proposed.left, proposed.top, proposed.right, proposed.bottom],
+                    u32::try_from(wparam.0).ok()?,
+                    &policy,
+                )
+                .unwrap_or(geometry.current);
+            *proposed = RECT {
+                left: rect[0],
+                top: rect[1],
+                right: rect[2],
+                bottom: rect[3],
+            };
+        }
+        Some(1)
+    }
+
     fn handle_get_min_max_info_msg(&self, lparam: LPARAM) -> Option<isize> {
+        if lparam.0 == 0 {
+            return None;
+        }
+        if let Some(policy) = self.native_resize_policy().filter(|policy| {
+            // WM_GETMINMAXINFO also runs during SetWindowPlacement/SetWindowPos.
+            // Non-resizable means the user cannot resize, not that a programmatic
+            // content update must retain the old (or constructor-default) size.
+            // WM_SIZING still applies Fixed, and native styles/hit testing reject
+            // user resize even outside the size/move loop.
+            !matches!(policy, NativeResizeConstraint::Fixed)
+                || self.state.modal_loops.get().in_size_move()
+        }) {
+            let geometry = self.native_resize_geometry()?;
+            let (min, max) = geometry
+                .limits(&policy)
+                .or_else(|| geometry.limits(&NativeResizeConstraint::Fixed))?;
+            // SAFETY: WM_GETMINMAXINFO supplies writable tracking limits.
+            // Keep ptMaxSize/ptMaxPosition native-owned for maximize and Snap.
+            unsafe {
+                let info = &mut *(lparam.0 as *mut MINMAXINFO);
+                info.ptMinTrackSize = POINT {
+                    x: min[0],
+                    y: min[1],
+                };
+                info.ptMaxTrackSize = POINT {
+                    x: max[0],
+                    y: max[1],
+                };
+            }
+            return Some(0);
+        }
         let min_size = self.state.min_size?;
         let scale_factor = self.state.scale_factor.get();
         let boarder_offset = &self.state.border_offset;
@@ -230,6 +462,13 @@ impl WindowsWindowInner {
                 .restore_from_minimized
                 .set(self.state.callbacks.request_frame.take());
             return Some(0);
+        }
+
+        if self.state.decorations.get() == WindowDecorations::Client {
+            self.state
+                .border_offset
+                .update(self.native_handle())
+                .log_err();
         }
 
         let width = lparam.loword().max(1) as i32;
@@ -323,6 +562,8 @@ impl WindowsWindowInner {
     }
 
     fn handle_destroy_msg(&self, handle: HWND) -> Option<isize> {
+        self.state.closing.set(true);
+        self.retire_native_activation();
         let callback = { self.state.callbacks.close.take() };
         // Re-enable parent window if this was a modal dialog
         if let Some(parent_hwnd) = self.parent_hwnd {
@@ -398,13 +639,14 @@ impl WindowsWindowInner {
     }
 
     fn handle_syskeyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
-        let input = handle_key_event(wparam, lparam, &self.state, |keystroke, _, metadata| {
-            PlatformInput::KeyUp(KeyUpEvent {
-                physical_key: physical_key_from_lparam(lparam),
-                key_metadata: Some(metadata),
-                keystroke,
-            })
-        })?;
+        let (input, _) =
+            handle_key_event(wparam, lparam, &self.state, |keystroke, _, metadata| {
+                PlatformInput::KeyUp(KeyUpEvent {
+                    physical_key: physical_key_from_lparam(lparam),
+                    key_metadata: Some(metadata),
+                    keystroke,
+                })
+            })?;
         let mut func = self.state.callbacks.input.take()?;
 
         func(input);
@@ -417,7 +659,10 @@ impl WindowsWindowInner {
     // It's a known bug that you can't trigger `ctrl-shift-0`. See:
     // https://superuser.com/questions/1455762/ctrl-shift-number-key-combination-has-stopped-working-for-a-few-numbers
     pub(crate) fn handle_keydown_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
-        let Some(input) = handle_key_event(
+        if self.state.closing.get() {
+            return Some(0);
+        }
+        let Some((mut input, dead_key)) = handle_key_event(
             wparam,
             lparam,
             &self.state,
@@ -431,22 +676,165 @@ impl WindowsWindowInner {
                 })
             },
         ) else {
+            // Some layouts have a native character but no shortcut key name.
+            // Keep that case on the same opt-in path; the probe is nonmutating.
+            let key = VIRTUAL_KEY(wparam.loword());
+            if !matches!(key, VK_PACKET | VK_PROCESSKEY) {
+                let (text, prefer_characters, dead_key) = process_key(key, lparam.hiword());
+                let modifiers = current_modifiers();
+                let native_text =
+                    prefer_characters || (text.is_some() && !modifiers.control && !modifiers.alt);
+                if native_text && !modifiers.platform {
+                    if let Some(origin) = self.prepare_native_character_target(true) {
+                        return self.handle_native_character_msg(origin, wparam, lparam);
+                    }
+                    if self.state.closing.get() {
+                        return Some(0);
+                    }
+                }
+                NATIVE_CHARACTERS.with(|state| {
+                    let mut next = state.get();
+                    next.ordinary_dead_keys.observe(
+                        unsafe { GetKeyboardLayout(0) }.0 as isize,
+                        text.is_some(),
+                        dead_key,
+                        false,
+                    );
+                    state.set(next);
+                });
+            }
             return Some(1);
         };
 
-        let Some(mut func) = self.state.callbacks.input.take() else {
-            return Some(1);
+        let native_target =
+            self.prepare_native_character_target(matches!(&input, PlatformInput::KeyDown(_)));
+        if self.state.closing.get() {
+            return Some(0);
+        }
+        let has_text =
+            matches!(&input, PlatformInput::KeyDown(event) if event.keystroke.key_char.is_some());
+        if native_target.is_some()
+            && let PlatformInput::KeyDown(event) = &mut input
+        {
+            event.prefer_character_input |= NATIVE_CHARACTERS
+                .get()
+                .ordinary_dead_keys
+                .requires_refusal(event);
+        }
+        let native_preference = if let PlatformInput::KeyDown(event) = &input {
+            event.prefer_character_input && !event.keystroke.modifiers.platform
+        } else {
+            false
         };
-
-        let handled = !func(input).propagate;
-
-        self.state.callbacks.input.set(Some(func));
+        let handled = if let Some(mut func) = self.state.callbacks.input.take() {
+            let handled = !func(input).propagate;
+            self.state.callbacks.input.set(Some(func));
+            handled
+        } else {
+            false
+        };
+        if !handled
+            && native_preference
+            && let Some(origin) = native_target
+        {
+            return self.handle_native_character_msg(origin, wparam, lparam);
+        }
+        NATIVE_CHARACTERS.with(|state| {
+            let mut next = state.get();
+            next.ordinary_dead_keys.observe(
+                unsafe { GetKeyboardLayout(0) }.0 as isize,
+                has_text,
+                dead_key,
+                handled,
+            );
+            next.key_dispatched(has_text, dead_key, handled);
+            state.set(next);
+        });
 
         if handled { Some(0) } else { Some(1) }
     }
 
+    fn prepare_native_character_target(
+        &self,
+        key_down: bool,
+    ) -> Option<crate::native_characters::Origin> {
+        if self.state.closing.get() {
+            return None;
+        }
+        // Paint before borrowing an input handler: painting may replace it.
+        let mut callback = self.state.callbacks.prepare_key_input.take()?;
+        let prepared = callback(key_down);
+        if self.state.closing.get() {
+            return None;
+        }
+        let replacement = self.state.callbacks.prepare_key_input.take();
+        self.state
+            .callbacks
+            .prepare_key_input
+            .set(replacement.or(Some(callback)));
+        if !prepared {
+            return None;
+        }
+        self.with_input_handler(|handler| handler.native_character_target())
+            .flatten()
+            .filter(|_| unsafe { GetFocus() } == self.native_handle())
+            .and_then(|target| {
+                crate::native_characters::Origin::capture(
+                    self.native_handle(),
+                    target,
+                    &self.state.native_character_authority,
+                )
+            })
+    }
+
+    fn handle_native_character_msg(
+        &self,
+        origin: crate::native_characters::Origin,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> Option<isize> {
+        let current = self
+            .with_input_handler(|handler| handler.native_character_target())
+            .flatten();
+        if current != Some(origin.target)
+            || !origin.is_current(&self.state.native_character_authority)
+        {
+            return Some(0);
+        }
+        let translated = crate::native_characters::translate(
+            origin,
+            &self.state.native_character_authority,
+            VIRTUAL_KEY(wparam.loword()),
+            u32::from(lparam.hiword() & 0xff),
+            NATIVE_CHARACTERS.get().ordinary_dead_keys,
+        );
+        if !origin.is_current(&self.state.native_character_authority) {
+            return Some(0);
+        }
+        match translated {
+            Ok(text) => {
+                self.with_input_handler(|handler| {
+                    handler.handle_native_characters_if(origin.target, Ok(&text), || {
+                        origin.is_current(&self.state.native_character_authority)
+                    })
+                });
+            }
+            Err(error) => {
+                self.with_input_handler(|handler| {
+                    handler.handle_native_characters_if(origin.target, Err(error), || {
+                        origin.is_current(&self.state.native_character_authority)
+                    })
+                });
+            }
+        }
+        // Both pumps call WM_GPUI_KEYDOWN before TranslateMessage. The selected
+        // target consumes this key even on failure; a second translation could
+        // create dead-key state or insert text twice.
+        Some(0)
+    }
+
     fn handle_keyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
-        let Some(input) =
+        let Some((input, _)) =
             handle_key_event(wparam, lparam, &self.state, |keystroke, _, metadata| {
                 PlatformInput::KeyUp(KeyUpEvent {
                     physical_key: physical_key_from_lparam(lparam),
@@ -469,7 +857,13 @@ impl WindowsWindowInner {
     }
 
     fn handle_char_msg(&self, wparam: WPARAM) -> Option<isize> {
-        let input = self.parse_char_message(wparam)?;
+        let generation = self
+            .with_input_handler(|input_handler| input_handler.text_input_generation())
+            .flatten();
+        let mut pending = self.state.pending_surrogate.take();
+        let input = decode_character(&mut pending, wparam.loword(), generation);
+        self.state.pending_surrogate.set(pending);
+        let input = input?;
         self.with_input_handler(|input_handler| {
             input_handler.replace_text_in_range(None, &input);
         });
@@ -501,6 +895,8 @@ impl WindowsWindowInner {
             click_count,
             first_mouse: false,
         });
+        let _native_drag_dispatch = (button == MouseButton::Left)
+            .then(|| self.native_drag.begin_left_down());
         let handled = !func(input).propagate;
         self.state.callbacks.input.set(Some(func));
 
@@ -696,6 +1092,9 @@ impl WindowsWindowInner {
         let ime_enabled = self
             .with_input_handler(|input_handler| input_handler.query_accepts_text_input())
             .unwrap_or(false);
+        if !ime_enabled {
+            self.state.pending_surrogate.set(None);
+        }
         if ime_enabled == self.state.ime_enabled.get() {
             return;
         }
@@ -730,11 +1129,7 @@ impl WindowsWindowInner {
     fn handle_ime_composition_inner(&self, ctx: HIMC, lparam: LPARAM) -> Option<isize> {
         let lparam = lparam.0 as u32;
         if lparam == 0 {
-            // Japanese IME may send this message with lparam = 0, which indicates that
-            // there is no composition string.
-            self.with_input_handler(|input_handler| {
-                input_handler.replace_text_in_range(None, "");
-            })?;
+            self.cancel_ime_composition();
             Some(0)
         } else {
             if lparam & GCS_RESULTSTR.0 > 0 {
@@ -773,12 +1168,41 @@ impl WindowsWindowInner {
         }
     }
 
+    fn cancel_ime_composition(&self) {
+        self.with_input_handler(|input_handler| {
+            // After a result was committed there may be a selected document
+            // range. Cancellation may remove only the remaining marked text.
+            let marked = input_handler.marked_text_range();
+            cancel_marked_text(marked, |range| {
+                input_handler.replace_text_in_range(Some(range), "");
+            });
+        });
+    }
+
     fn handle_calc_client_size(
         &self,
         handle: HWND,
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> Option<isize> {
+        if self.state.decorations.get() == WindowDecorations::Client && lparam.0 != 0 {
+            // Both message forms begin with the proposed window RECT. Returning
+            // zero makes it drawable; preserve the OS-owned maximized outer
+            // frame while clipping its client area away from the taskbar.
+            let proposed = unsafe { &mut *(lparam.0 as *mut RECT) };
+            if self.state.is_maximized() {
+                let monitor = unsafe { MonitorFromRect(proposed, MONITOR_DEFAULTTONEAREST) };
+                let mut info = MONITORINFO {
+                    cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                    ..Default::default()
+                };
+                unsafe { GetMonitorInfoW(monitor, &mut info) }
+                    .ok()
+                    .log_err()?;
+                *proposed = crate::window::client_frame::maximized_client(*proposed, info.rcWork)?;
+            }
+            return Some(0);
+        }
         if !self.hide_title_bar || self.state.is_fullscreen() || wparam.0 == 0 {
             return None;
         }
@@ -796,8 +1220,15 @@ impl WindowsWindowInner {
         }
     }
 
-    fn handle_activate_msg(self: &Rc<Self>, wparam: WPARAM) -> Option<isize> {
+    fn handle_activate_msg(self: &Rc<Self>, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
         let activated = wparam.loword() > 0;
+        self.notify_native_activation(if activated {
+            NativeWindowActivation::Activated
+        } else {
+            NativeWindowActivation::Deactivated {
+                next_window: (lparam.0 != 0).then_some(lparam.0),
+            }
+        });
 
         let events = self
             .state
@@ -813,6 +1244,7 @@ impl WindowsWindowInner {
 
         if !activated {
             this.state.cursor_visible.store(true, Ordering::Relaxed);
+            this.state.pending_surrogate.set(None);
         }
 
         // When the window is activated (gains focus), reset the modifier tracking state.
@@ -863,7 +1295,7 @@ impl WindowsWindowInner {
     }
 
     fn handle_create_msg(&self, handle: HWND) -> Option<isize> {
-        if self.hide_title_bar {
+        if self.hide_title_bar || self.state.decorations.get() == WindowDecorations::Client {
             notify_frame_changed(handle);
             Some(0)
         } else {
@@ -966,7 +1398,26 @@ impl WindowsWindowInner {
 
     fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
         if self.state.is_fullscreen() {
-            return None;
+            return (self.state.decorations.get() == WindowDecorations::Client)
+                .then_some(HTCLIENT as isize);
+        }
+
+        let client_decorated = self.state.decorations.get() == WindowDecorations::Client;
+        if client_decorated && self.is_resizable.get() && !self.state.is_maximized() {
+            let mut bounds = RECT::default();
+            unsafe { GetWindowRect(handle, &mut bounds) }.log_err()?;
+            let dpi = unsafe { GetDpiForWindow(handle) };
+            let hit = crate::window::client_frame::hit_test(
+                bounds,
+                POINT {
+                    x: lparam.signed_loword().into(),
+                    y: lparam.signed_hiword().into(),
+                },
+                [get_frame_thicknessx(dpi), get_frame_thicknessy(dpi)],
+            );
+            if hit != HTCLIENT {
+                return Some(hit as isize);
+            }
         }
 
         let callback = self.state.callbacks.hit_test_window_control.take();
@@ -980,16 +1431,20 @@ impl WindowsWindowInner {
                 WindowControlArea::Drag if self.is_movable => Some(HTCAPTION as _),
                 WindowControlArea::Drag => None,
                 WindowControlArea::Close => Some(HTCLOSE as _),
-                WindowControlArea::Max if self.is_resizable => Some(HTMAXBUTTON as _),
+                WindowControlArea::Max if self.is_maximizable() => Some(HTMAXBUTTON as _),
                 WindowControlArea::Max if self.is_movable => Some(HTCAPTION as _),
                 WindowControlArea::Max => Some(HTNOWHERE as _),
-                WindowControlArea::Min if self.is_minimizable => Some(HTMINBUTTON as _),
+                WindowControlArea::Min if self.is_minimizable.get() => Some(HTMINBUTTON as _),
                 WindowControlArea::Min if self.is_movable => Some(HTCAPTION as _),
                 WindowControlArea::Min => Some(HTNOWHERE as _),
             })
         } else {
             None
         };
+
+        if client_decorated {
+            return Some(drag_area.unwrap_or(HTCLIENT as isize));
+        }
 
         if !self.hide_title_bar {
             // If the OS draws the title bar, we don't need to handle hit test messages.
@@ -1007,7 +1462,7 @@ impl WindowsWindowInner {
         };
 
         unsafe { ScreenToClient(handle, &mut cursor_point).ok().log_err() };
-        if self.is_resizable
+        if self.is_resizable.get()
             && !self.state.is_maximized()
             && 0 <= cursor_point.y
             && cursor_point.y <= frame_y
@@ -1137,12 +1592,12 @@ impl WindowsWindowInner {
             && let Some(last_pressed) = last_pressed
         {
             let handled = match (wparam.0 as u32, last_pressed) {
-                (HTMINBUTTON, HTMINBUTTON) if self.is_minimizable => {
+                (HTMINBUTTON, HTMINBUTTON) if self.is_minimizable.get() => {
                     unsafe { ShowWindowAsync(handle, SW_MINIMIZE).ok().log_err() };
                     true
                 }
                 (HTMINBUTTON, HTMINBUTTON) => true,
-                (HTMAXBUTTON, HTMAXBUTTON) if self.is_resizable => {
+                (HTMAXBUTTON, HTMAXBUTTON) if self.is_maximizable() => {
                     if self.state.is_maximized() {
                         unsafe { ShowWindowAsync(handle, SW_NORMAL).ok().log_err() };
                     } else {
@@ -1257,6 +1712,12 @@ impl WindowsWindowInner {
     }
 
     fn handle_input_language_changed(&self) -> Option<isize> {
+        NATIVE_CHARACTERS.with(|state| {
+            let mut next = state.get();
+            next.dead_key_pending = false;
+            state.set(next);
+        });
+        self.state.pending_surrogate.set(None);
         unsafe {
             PostMessageW(
                 Some(self.platform_window_handle),
@@ -1404,38 +1865,6 @@ impl WindowsWindowInner {
         Some(0)
     }
 
-    #[inline]
-    fn parse_char_message(&self, wparam: WPARAM) -> Option<String> {
-        let code_point = wparam.loword();
-
-        // https://www.unicode.org/versions/Unicode16.0.0/core-spec/chapter-3/#G2630
-        match code_point {
-            0xD800..=0xDBFF => {
-                // High surrogate, wait for low surrogate
-                self.state.pending_surrogate.set(Some(code_point));
-                None
-            }
-            0xDC00..=0xDFFF => {
-                if let Some(high_surrogate) = self.state.pending_surrogate.take() {
-                    // Low surrogate, combine with pending high surrogate
-                    String::from_utf16(&[high_surrogate, code_point]).ok()
-                } else {
-                    // Invalid low surrogate without a preceding high surrogate
-                    log::warn!(
-                        "Received low surrogate without a preceding high surrogate: {code_point:x}"
-                    );
-                    None
-                }
-            }
-            _ => {
-                self.state.pending_surrogate.set(None);
-                char::from_u32(code_point as u32)
-                    .filter(|c| !c.is_control())
-                    .map(|c| c.to_string())
-            }
-        }
-    }
-
     /// Clear the hidden flag and restore the cursor immediately
     fn restore_cursor_after_hide(&self) {
         if !self.state.cursor_visible.swap(true, Ordering::Relaxed) {
@@ -1525,7 +1954,7 @@ fn handle_key_event<F>(
     lparam: LPARAM,
     state: &WindowsWindowState,
     f: F,
-) -> Option<PlatformInput>
+) -> Option<(PlatformInput, bool)>
 where
     F: FnOnce(Keystroke, bool, KeyEventMetadata) -> PlatformInput,
 {
@@ -1542,12 +1971,15 @@ where
                 return None;
             }
             state.last_reported_modifiers.set(Some(modifiers));
-            Some(PlatformInput::ModifiersChanged(ModifiersChangedEvent {
-                modifiers,
-                capslock: current_capslock(),
-            }))
+            Some((
+                PlatformInput::ModifiersChanged(ModifiersChangedEvent {
+                    modifiers,
+                    capslock: current_capslock(),
+                }),
+                false,
+            ))
         }
-        VK_PACKET => None,
+        VK_PACKET | VK_PROCESSKEY => None,
         VK_CAPITAL => {
             let capslock = current_capslock();
             if state
@@ -1558,10 +1990,13 @@ where
                 return None;
             }
             state.last_reported_capslock.set(Some(capslock));
-            Some(PlatformInput::ModifiersChanged(ModifiersChangedEvent {
-                modifiers,
-                capslock,
-            }))
+            Some((
+                PlatformInput::ModifiersChanged(ModifiersChangedEvent {
+                    modifiers,
+                    capslock,
+                }),
+                false,
+            ))
         }
         vkey => {
             // Keep native layout facts separate from shortcut normalization.
@@ -1580,8 +2015,12 @@ where
                 caps_lock: current_capslock().on,
                 num_lock: unsafe { GetKeyState(VK_NUMLOCK.0 as i32) & 1 } != 0,
             };
-            let keystroke = parse_normal_key(vkey, lparam, modifiers)?;
-            Some(f(keystroke.0, keystroke.1, metadata))
+            let (keystroke, prefer_character_input, dead_key) =
+                parse_normal_key(vkey, lparam, modifiers)?;
+            let prefer_character_input = NATIVE_CHARACTERS
+                .get()
+                .prefers_text(keystroke.key_char.is_some(), prefer_character_input);
+            Some((f(keystroke, prefer_character_input, metadata), dead_key))
         }
     }
 }
@@ -1641,8 +2080,8 @@ fn parse_normal_key(
     vkey: VIRTUAL_KEY,
     lparam: LPARAM,
     mut modifiers: Modifiers,
-) -> Option<(Keystroke, bool)> {
-    let (key_char, prefer_character_input) = process_key(vkey, lparam.hiword());
+) -> Option<(Keystroke, bool, bool)> {
+    let (key_char, prefer_character_input, dead_key) = process_key(vkey, lparam.hiword());
 
     let key = parse_immutable(vkey).or_else(|| {
         let scan_code = lparam.hiword() & 0xFF;
@@ -1656,14 +2095,15 @@ fn parse_normal_key(
             key_char,
         },
         prefer_character_input,
+        dead_key,
     ))
 }
 
-fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
+fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool, bool) {
     let mut keyboard_state = [0u8; 256];
     unsafe {
         if GetKeyboardState(&mut keyboard_state).is_err() {
-            return (None, false);
+            return (None, false, false);
         }
     }
 
@@ -1679,7 +2119,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
     };
 
     if result_c == 0 {
-        return (None, false);
+        return (None, false, false);
     }
 
     let c = &buffer_c[..result_c.unsigned_abs() as usize];
@@ -1688,11 +2128,11 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
         .filter(|s| !s.is_empty() && !s.chars().next().unwrap().is_control());
 
     if result_c < 0 {
-        return (key_char, true);
+        return (key_char, true, true);
     }
 
     if key_char.is_none() {
-        return (None, false);
+        return (None, false, false);
     }
 
     // Workaround for some bug that makes the compiler think keyboard_state is still zeroed out
@@ -1704,7 +2144,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
 
     let has_modifiers = ctrl_down || alt_down || win_down;
     if !has_modifiers {
-        return (key_char, false);
+        return (key_char, false, false);
     }
 
     let mut state_no_modifiers = keyboard_state;
@@ -1732,6 +2172,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
     (
         key_char,
         result_c != result_c_no_modifiers || c != c_no_modifiers,
+        false,
     )
 }
 
@@ -1873,5 +2314,100 @@ mod physical_key_tests {
         assert_eq!(normal, physical_key_from_lparam(LPARAM(0x401c0001)));
         assert_ne!(normal, physical_key_from_lparam(LPARAM(0x011c0001)));
         assert_eq!(physical_key_from_lparam(LPARAM(0)), None);
+    }
+}
+
+#[cfg(test)]
+mod native_window_input_tests {
+    use super::{
+        NativeCharacterState, NativeModalLoops, cancel_marked_text, decode_character,
+        mouse_activate_result,
+    };
+
+    #[test]
+    fn utf16_pairs_cannot_cross_focus_or_text_acceptance_boundaries() {
+        let mut pending = None;
+        assert_eq!(decode_character(&mut pending, 0xd83d, Some((4, 0))), None);
+        assert_eq!(
+            decode_character(&mut pending, 0xdc4b, Some((4, 0))),
+            Some("👋".into())
+        );
+        assert_eq!(pending, None);
+        assert_eq!(decode_character(&mut pending, 0xd83d, Some((4, 0))), None);
+        assert_eq!(decode_character(&mut pending, 0xdc4b, Some((5, 0))), None);
+        assert_eq!(decode_character(&mut pending, 0xd83d, Some((5, 0))), None);
+        assert_eq!(decode_character(&mut pending, 0xdc4b, Some((5, 1))), None);
+        assert_eq!(decode_character(&mut pending, 0xd83d, Some((5, 1))), None);
+        assert_eq!(decode_character(&mut pending, 0xdc4b, None), None);
+        assert_eq!(decode_character(&mut pending, 0xdc4b, Some((5, 1))), None);
+        assert_eq!(decode_character(&mut pending, 0xd83d, Some((5, 1))), None);
+        assert_eq!(
+            decode_character(&mut pending, b'a' as u16, Some((5, 1))),
+            Some("a".into())
+        );
+        assert_eq!(decode_character(&mut pending, 0xdc4b, Some((5, 1))), None);
+    }
+    use windows::Win32::UI::WindowsAndMessaging::{
+        MA_ACTIVATE, MA_NOACTIVATE, WM_ENTERMENULOOP, WM_ENTERSIZEMOVE, WM_EXITMENULOOP,
+        WM_EXITSIZEMOVE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    };
+
+    #[test]
+    fn nonactivating_popups_keep_the_owner_active() {
+        assert_eq!(
+            mouse_activate_result(WS_EX_TOOLWINDOW.0),
+            MA_ACTIVATE as isize
+        );
+        assert_eq!(
+            mouse_activate_result((WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE).0),
+            MA_NOACTIVATE as isize,
+        );
+    }
+
+    #[test]
+    fn nested_menus_do_not_end_an_interactive_resize() {
+        let mut loops = NativeModalLoops::default();
+        loops.update(WM_ENTERMENULOOP);
+        assert!(loops.active());
+        assert!(!loops.in_size_move());
+        loops.update(WM_ENTERSIZEMOVE);
+        loops.update(WM_ENTERMENULOOP);
+        loops.update(WM_EXITMENULOOP);
+        loops.update(WM_EXITMENULOOP);
+        assert!(loops.active());
+        assert!(loops.in_size_move());
+        loops.update(WM_EXITSIZEMOVE);
+        assert!(!loops.active());
+        loops.update(WM_EXITMENULOOP);
+        assert!(!loops.active());
+    }
+
+    #[test]
+    fn cancelled_composition_cannot_delete_a_committed_document_selection() {
+        let mut document = "before marked after".to_owned();
+        cancel_marked_text(Some(7..13), |range| {
+            document.replace_range(range, "");
+        });
+        assert_eq!(document, "before  after");
+        // A result commit has already removed the marked range. The following
+        // end-composition message must leave the document's selection alone.
+        cancel_marked_text(None, |_| panic!("cancelled committed text"));
+        cancel_marked_text(Some(0..0), |_| panic!("cancelled an empty composition"));
+    }
+
+    #[test]
+    fn a_dead_key_is_drained_by_ascii_text_but_not_by_remote_shortcuts() {
+        let mut state = NativeCharacterState::default();
+        assert!(!state.prefers_text(true, false));
+        state.key_dispatched(true, true, true);
+        assert!(!state.prefers_text(true, false));
+        state.key_dispatched(true, true, false);
+        assert!(state.prefers_text(true, false));
+        assert!(!state.prefers_text(false, false));
+        state.key_dispatched(false, false, true);
+        assert!(state.prefers_text(true, false));
+        state.key_dispatched(true, false, false);
+        assert!(!state.prefers_text(true, false));
+        assert!(state.prefers_text(true, true));
     }
 }

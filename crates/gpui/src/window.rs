@@ -1230,6 +1230,8 @@ pub struct Window {
     pub(crate) display_observers: SubscriberSet<(), AnyObserver>,
     is_resizable: bool,
     is_minimizable: bool,
+    #[cfg(windows)]
+    maximizable: Option<bool>,
     sprite_atlas: Arc<dyn PlatformAtlas>,
     text_system: Arc<WindowTextSystem>,
     text_rendering_mode: Rc<Cell<TextRenderingMode>>,
@@ -1585,6 +1587,10 @@ impl Window {
         cx: &mut App,
     ) -> Result<Self> {
         let WindowOptions {
+            #[cfg(windows)]
+            local_file_drop,
+            #[cfg(windows)]
+            mouse_passthrough,
             window_bounds,
             titlebar,
             focus,
@@ -1619,6 +1625,12 @@ impl Window {
         let mut platform_window = cx.platform.open_window(
             handle,
             WindowParams {
+                #[cfg(windows)]
+                local_file_drop,
+                #[cfg(windows)]
+                mouse_passthrough,
+                #[cfg(windows)]
+                window_decorations: window_decorations.unwrap_or(WindowDecorations::Server),
                 bounds: window_bounds.get_bounds(),
                 titlebar,
                 kind,
@@ -2059,6 +2071,18 @@ impl Window {
                     .unwrap_or(DispatchEventResult::default())
             })
         });
+        #[cfg(target_os = "windows")]
+        platform_window.on_prepare_key_input({
+            let mut cx = cx.to_async();
+            Box::new(move |key_down| {
+                handle
+                    .update(&mut cx, |_, window, cx| {
+                        window.prepare_key_input(key_down, cx)
+                    })
+                    .log_err()
+                    .is_some()
+            })
+        });
         platform_window.on_hit_test_window_control({
             let mut cx = cx.to_async();
             Box::new(move || {
@@ -2142,6 +2166,8 @@ impl Window {
             display_observers: SubscriberSet::new(),
             is_resizable,
             is_minimizable,
+            #[cfg(windows)]
+            maximizable: None,
             sprite_atlas,
             text_system,
             text_rendering_mode: cx.text_rendering_mode.clone(),
@@ -2491,7 +2517,8 @@ impl Window {
         self.platform_window.is_maximized()
     }
 
-    /// request a certain window decoration (Wayland)
+    /// Request client or server decorations on platforms that support them.
+    /// Windows applies runtime frame changes after the current update.
     pub fn request_decorations(&self, decorations: WindowDecorations) {
         self.platform_window.request_decorations(decorations);
     }
@@ -3006,6 +3033,75 @@ impl Window {
         }
     }
 
+    /// Replace the Windows native resize policy synchronously.
+    ///
+    /// The selector runs inside Win32 sizing messages and must not access GPUI
+    /// or native windows. The HWND releases the snapshot when replaced or closed.
+    #[cfg(windows)]
+    pub fn set_native_resize_constraint(&self, constraint: Option<crate::NativeResizeConstraint>) {
+        self.platform_window
+            .set_native_resize_constraint(constraint);
+    }
+
+    /// Fence native Windows focus changes before ordinary activation observers.
+    ///
+    /// The callback must only update independent policy: no GPUI access, native
+    /// calls, I/O, or rendering. Replacement and close retire the old callback.
+    /// It runs without backend callback/state borrows and may retire its owner.
+    #[cfg(windows)]
+    pub fn set_native_activation_handler(
+        &self,
+        handler: Option<Rc<dyn Fn(crate::NativeWindowActivation)>>,
+    ) {
+        self.platform_window.set_native_activation_handler(handler);
+    }
+
+    /// Update a Windows popup's mouse policy without recreating its HWND.
+    /// Enabling blocks mouse hits and activation; disabling restores hit testing
+    /// while preserving native no-activate styles. Other window kinds are unchanged.
+    #[cfg(windows)]
+    pub fn set_popup_mouse_passthrough(&self, enabled: bool) {
+        self.platform_window.set_popup_mouse_passthrough(enabled);
+    }
+
+    /// Handle owned Windows file-list drops outside native message dispatch.
+    /// `context` only reads independent state and returns `None` when no painted
+    /// target exists. The callback must recheck its context before using the paths.
+    /// This does not participate in GPUI's application-wide active drag.
+    #[cfg(windows)]
+    pub fn on_native_file_drop(
+        &self,
+        context: Rc<dyn Fn() -> Option<u64>>,
+        mut callback: impl FnMut(crate::NativeFileDrop, &mut Window, &mut App) + 'static,
+        cx: &App,
+    ) {
+        let handle = self.handle;
+        let mut cx = cx.to_async();
+        self.platform_window.on_native_file_drop(
+            context,
+            Box::new(move |event| {
+                handle
+                    .update(&mut cx, |_, window, cx| callback(event, window, cx))
+                    .log_err();
+            }),
+        );
+    }
+
+    /// Enable Windows local-file admission for an opt-in window. Disabling also
+    /// invalidates queued native drops; other windows retain their default mode.
+    #[cfg(windows)]
+    pub fn set_native_file_drop_enabled(&self, enabled: bool) {
+        self.platform_window.set_native_file_drop_enabled(enabled);
+    }
+
+    /// Retain one genuine Windows left-button press from its mouse-down handler.
+    /// Later claim it outside the input handler, after asynchronous drag preparation.
+    /// This does not start a native drag or change GPUI's active drag.
+    #[cfg(windows)]
+    pub fn capture_native_drag_gesture(&self) -> Option<crate::NativeDragGesture> {
+        self.platform_window.capture_native_drag_gesture()
+    }
+
     /// Toggle zoom on the window.
     pub fn zoom_window(&self) {
         self.platform_window.zoom();
@@ -3016,7 +3112,7 @@ impl Window {
         self.platform_window.show_window_menu(position)
     }
 
-    /// Handle window movement for Linux and macOS.
+    /// Start native window movement.
     /// Tells the compositor to take control of window movement (Wayland and X11)
     ///
     /// Events may not be received during a move operation.
@@ -3045,9 +3141,57 @@ impl Window {
         self.is_resizable
     }
 
+    /// Update resize permission and the platform's native window controls.
+    #[cfg(target_os = "windows")]
+    pub fn set_resizable(&mut self, resizable: bool) {
+        if self.is_resizable != resizable {
+            self.is_resizable = resizable;
+            self.platform_window.set_resizable(resizable);
+        }
+    }
+
     /// Returns whether this window is minimizable.
     pub fn is_minimizable(&self) -> bool {
         self.is_minimizable
+    }
+
+    /// Update minimize permission and the platform's native window controls.
+    #[cfg(target_os = "windows")]
+    pub fn set_minimizable(&mut self, minimizable: bool) {
+        if self.is_minimizable != minimizable {
+            self.is_minimizable = minimizable;
+            self.platform_window.set_minimizable(minimizable);
+        }
+    }
+
+    /// Set Windows maximize permission independently from resize permission.
+    /// Until explicitly set, maximize permission follows resize permission.
+    #[cfg(windows)]
+    pub fn set_maximizable(&mut self, maximizable: bool) {
+        if self.maximizable != Some(maximizable) {
+            self.maximizable = Some(maximizable);
+            self.platform_window.set_maximizable(maximizable);
+        }
+    }
+
+    /// Whether Windows offers maximize through its native controls.
+    #[cfg(windows)]
+    pub fn is_maximizable(&self) -> bool {
+        self.maximizable.unwrap_or(self.is_resizable)
+    }
+
+    /// Request an absolute Windows maximize state without toggling a pending request.
+    /// Fullscreen, minimized, and interactively resizing windows retain their
+    /// state; callers defer until restored. Visible restore does not activate.
+    #[cfg(windows)]
+    pub fn set_maximized(&self, maximized: bool) {
+        self.platform_window.set_maximized(maximized);
+    }
+
+    /// Whether the platform is running an interactive window move or resize.
+    #[cfg(target_os = "windows")]
+    pub fn is_in_live_resize(&self) -> bool {
+        self.platform_window.is_in_live_resize()
     }
 
     /// Returns the controls supported by the platform.
@@ -6050,6 +6194,9 @@ impl Window {
             return InputPreference::KeyBindings;
         };
         let accepts_text_input = input_handler.accepts_text_input(self, cx);
+        #[cfg(target_os = "windows")]
+        let accepts_text_input =
+            accepts_text_input || input_handler.accepts_native_characters(self, cx);
         self.platform_window.set_input_handler(input_handler);
         if accepts_text_input {
             InputPreference::CharacterInput
@@ -6058,7 +6205,24 @@ impl Window {
         }
     }
 
+    #[cfg(target_os = "windows")]
+    fn prepare_key_input(&mut self, key_down: bool, cx: &mut App) {
+        // Native character routing captures the painted handler before key
+        // listeners run. Prepare the same modality and dirty frame that key
+        // dispatch uses, without borrowing an input handler across the paint.
+        if key_down && self.last_input_modality != InputModality::Keyboard {
+            self.last_input_modality = InputModality::Keyboard;
+            self.refresh();
+        }
+        if self.invalidator.is_dirty() {
+            self.draw(cx).clear(cx);
+        }
+    }
+
     fn dispatch_key_event(&mut self, event: &dyn Any, cx: &mut App) {
+        #[cfg(target_os = "windows")]
+        self.prepare_key_input(event.is::<KeyDownEvent>(), cx);
+        #[cfg(not(target_os = "windows"))]
         if self.invalidator.is_dirty() {
             self.draw(cx).clear(cx);
         }
@@ -9989,3 +10153,6 @@ mod inspector_tests {
         .expect("closed inspector has no bookkeeping and no style overrides");
     }
 }
+
+#[cfg(all(test, target_os = "windows"))]
+mod native_character_tests;

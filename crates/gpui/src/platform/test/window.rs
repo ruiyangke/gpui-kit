@@ -32,6 +32,8 @@ pub(crate) struct TestWindowState {
     pub(crate) should_close_handler: Option<Box<dyn FnMut() -> bool>>,
     hit_test_window_control_callback: Option<Box<dyn FnMut() -> Option<WindowControlArea>>>,
     input_callback: Option<Box<dyn FnMut(PlatformInput) -> DispatchEventResult>>,
+    #[cfg(target_os = "windows")]
+    prepare_key_input_callback: Option<Box<dyn FnMut(bool) -> bool>>,
     active_status_change_callback: Option<Box<dyn FnMut(bool)>>,
     visibility: WindowVisibility,
     visibility_callback: Option<Box<dyn FnMut(WindowVisibility)>>,
@@ -108,6 +110,8 @@ impl TestWindow {
             should_close_handler: None,
             hit_test_window_control_callback: None,
             input_callback: None,
+            #[cfg(target_os = "windows")]
+            prepare_key_input_callback: None,
             active_status_change_callback: None,
             visibility: WindowVisibility::Visible,
             visibility_callback: None,
@@ -231,6 +235,20 @@ impl TestWindow {
         self.0.lock().text_input_state_changes.clone()
     }
 
+    #[cfg(target_os = "windows")]
+    pub fn simulate_prepare_key_input(&self, key_down: bool) -> bool {
+        let callback = { self.0.lock().prepare_key_input_callback.take() };
+        let Some(mut callback) = callback else {
+            return false;
+        };
+        let prepared = callback(key_down);
+        let mut state = self.0.lock();
+        if state.prepare_key_input_callback.is_none() {
+            state.prepare_key_input_callback = Some(callback);
+        }
+        prepared
+    }
+
     pub fn simulate_resize(&mut self, size: Size<Pixels>) {
         let scale_factor = self.scale_factor();
         let mut lock = self.0.lock();
@@ -313,6 +331,19 @@ impl TestWindow {
 }
 
 impl PlatformWindow for TestWindow {
+    #[cfg(windows)]
+    fn set_native_activation_handler(
+        &self,
+        _: Option<std::rc::Rc<dyn Fn(crate::NativeWindowActivation)>>,
+    ) {
+        // This backend does not dispatch native activation messages.
+    }
+
+    #[cfg(windows)]
+    fn set_native_resize_constraint(&self, _: Option<crate::NativeResizeConstraint>) {
+        // This backend has no HWND or native sizing loop.
+    }
+
     fn visual_viewport_bounds(&self) -> Bounds<Pixels> {
         let state = self.0.lock();
         state
@@ -515,6 +546,11 @@ impl PlatformWindow for TestWindow {
 
     fn on_input(&self, callback: Box<dyn FnMut(crate::PlatformInput) -> DispatchEventResult>) {
         self.0.lock().input_callback = Some(callback)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn on_prepare_key_input(&self, callback: Box<dyn FnMut(bool) -> bool>) {
+        self.0.lock().prepare_key_input_callback = Some(callback);
     }
 
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>) {

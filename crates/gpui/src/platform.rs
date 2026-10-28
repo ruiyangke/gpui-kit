@@ -2,6 +2,8 @@ mod app_menu;
 mod keyboard;
 mod keystroke;
 mod platform_info;
+#[cfg(windows)]
+mod native_drag;
 
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 #[expect(missing_docs)]
@@ -82,6 +84,8 @@ use uuid::Uuid;
 pub use app_menu::*;
 pub use keyboard::*;
 pub use keystroke::*;
+#[cfg(windows)]
+pub use native_drag::{NativeDragGesture, NativeDragTracking};
 
 /// Whether the platform is presenting a window's frames.
 ///
@@ -1220,7 +1224,61 @@ pub enum TextInputStateChange {
     ContentChanged,
 }
 
+/// Immutable client-size policy used by the Windows native sizing loop.
+///
+/// The selector receives and returns logical client dimensions. It must be
+/// bounded and pure: no GPUI access, native calls, window capture, or mutation.
+/// Returning `None` refuses that resize. Minimum and maximum must be finite,
+/// positive, and ordered; invalid values also refuse resizing.
+#[cfg(windows)]
+#[derive(Clone)]
+pub enum NativeResizeConstraint {
+    /// Keep the HWND's current size during an interactive resize.
+    Fixed,
+    /// Select a legal client size within the supplied bounds.
+    Constrained {
+        /// Smallest legal logical client size.
+        minimum: Size<Pixels>,
+        /// Largest legal logical client size.
+        maximum: Size<Pixels>,
+        /// Nearest legal logical client size, or refusal.
+        select: Rc<dyn Fn(Size<Pixels>) -> Option<Size<Pixels>>>,
+    },
+}
+
+/// Native Windows focus changes delivered before deferred GPUI observers.
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeWindowActivation {
+    /// This window received activation.
+    Activated,
+    /// This window lost activation.
+    Deactivated {
+        /// Destination HWND supplied by the native activation message, if known.
+        next_window: Option<isize>,
+    },
+    /// This registration was replaced or its native window is closing.
+    Retired,
+}
+
 #[expect(missing_docs)]
+/// An owned Windows file-list drop, captured after release, before asynchronous dispatch.
+/// No source effect (copy, move, or link) is negotiated by this event.
+#[cfg(windows)]
+#[derive(Debug)]
+pub struct NativeFileDrop {
+    /// Exact native paths. Filesystem validation belongs on a bounded worker.
+    pub paths: Vec<std::path::PathBuf>,
+    /// Final client position in logical pixels, never a later cursor sample.
+    pub position: Point<Pixels>,
+    /// Client geometry captured with the drop.
+    pub client_size: Size<Pixels>,
+    /// Scale captured with the drop.
+    pub scale_factor: f32,
+    /// Application context generation captured without entering GPUI.
+    pub context: u64,
+}
+
 pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn bounds(&self) -> Bounds<Pixels>;
     fn is_maximized(&self) -> bool;
@@ -1247,6 +1305,37 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         false
     }
     fn resize(&mut self, size: Size<Pixels>);
+    /// Replace the immutable native sizing policy; `None` restores platform defaults.
+    #[cfg(windows)]
+    fn set_native_resize_constraint(&self, constraint: Option<NativeResizeConstraint>);
+    /// Install a pure native focus fence, outside GPUI App/window dispatch.
+    #[cfg(windows)]
+    fn set_native_activation_handler(&self, handler: Option<Rc<dyn Fn(NativeWindowActivation)>>);
+
+    /// Change hit-test passthrough for an existing Windows popup. Other window
+    /// kinds are unchanged. This does not remove an existing no-activate style.
+    #[cfg(windows)]
+    fn set_popup_mouse_passthrough(&self, _enabled: bool) {}
+
+    /// Register the Windows local-file callback. The context selector must only
+    /// read independent state; it may not enter GPUI, native APIs, or perform I/O.
+    #[cfg(windows)]
+    fn on_native_file_drop(
+        &self,
+        _context: Rc<dyn Fn() -> Option<u64>>,
+        _callback: Box<dyn FnMut(NativeFileDrop)>,
+    ) {
+    }
+    /// Toggle local-file admission, invalidating queued events when disabled.
+    #[cfg(windows)]
+    fn set_native_file_drop_enabled(&self, _enabled: bool) {}
+
+    /// Capture one genuine Windows left-button press during its native dispatch.
+    #[cfg(windows)]
+    fn capture_native_drag_gesture(&self) -> Option<NativeDragGesture> {
+        None
+    }
+
     fn scale_factor(&self) -> f32;
     fn appearance(&self) -> WindowAppearance;
     fn display(&self) -> Option<Rc<dyn PlatformDisplay>>;
@@ -1291,6 +1380,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     }
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>);
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>);
+    /// Prepare the current painted handler before native key-down capture.
+    /// The flag distinguishes a key-down event from a modifier-only update.
+    /// Return false if the window can no longer prepare an input target.
+    #[cfg(target_os = "windows")]
+    fn on_prepare_key_input(&self, _callback: Box<dyn FnMut(bool) -> bool>) {}
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>);
     /// Registers the callback invoked when [`Self::visibility`] changes. Only
     /// transitions are reported; the callback runs on the main thread outside
@@ -1365,6 +1459,15 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         false
     }
     fn start_window_resize(&self, _edge: ResizeEdge) {}
+    fn set_resizable(&self, _resizable: bool) {}
+    fn set_minimizable(&self, _minimizable: bool) {}
+    #[cfg(windows)]
+    fn set_maximizable(&self, _maximizable: bool) {}
+    #[cfg(windows)]
+    fn set_maximized(&self, _maximized: bool) {}
+    fn is_in_live_resize(&self) -> bool {
+        false
+    }
     fn set_exclusive_zone(&self, _zone: Pixels) {}
     #[cfg(all(target_os = "linux", feature = "wayland"))]
     fn set_exclusive_edge(&self, _edge: layer_shell::Anchor) {}
@@ -2265,6 +2368,87 @@ impl PlatformInputHandler {
             .unwrap_or(false)
     }
 
+    /// Identify the focused Windows text target across native UTF-16 messages.
+    #[cfg(target_os = "windows")]
+    pub fn text_input_generation(&mut self) -> Option<(u64, u64)> {
+        self.cx
+            .update(|window, cx| {
+                let context = self.handler.text_input_context_generation(window, cx);
+                (self.handler.accepts_text_input(window, cx) && window.focus.is_some())
+                    .then_some((window.focus_generation, context))
+            })
+            .ok()
+            .flatten()
+    }
+
+    /// A separate opt-in target for layout characters without an IME document.
+    #[cfg(target_os = "windows")]
+    pub fn accepts_native_characters(&mut self, window: &mut Window, cx: &mut App) -> bool {
+        window.is_window_active()
+            && window.focus.is_some()
+            && self.handler.native_character_context(window, cx).is_some()
+    }
+
+    /// Capture the active handler's focus and logical target generations.
+    #[cfg(target_os = "windows")]
+    pub fn native_character_target(&mut self) -> Option<(u64, u64)> {
+        self.cx
+            .update(|window, cx| {
+                if !window.is_window_active() || window.focus.is_none() {
+                    return None;
+                }
+                self.handler
+                    .native_character_context(window, cx)
+                    .map(|context| (window.focus_generation, context))
+            })
+            .ok()
+            .flatten()
+    }
+
+    /// Reconcile the captured target before delivering a synchronous translation.
+    #[cfg(target_os = "windows")]
+    pub fn handle_native_characters(
+        &mut self,
+        target: (u64, u64),
+        text: Result<&str, &str>,
+    ) -> bool {
+        self.handle_native_characters_if(target, text, || true)
+    }
+
+    /// Recheck native authority after the handler's context query, which can
+    /// synchronously change focus. No application callback runs between this
+    /// final guard and text or error delivery.
+    #[cfg(target_os = "windows")]
+    pub fn handle_native_characters_if(
+        &mut self,
+        target: (u64, u64),
+        text: Result<&str, &str>,
+        is_current: impl FnOnce() -> bool,
+    ) -> bool {
+        self.cx
+            .update(|window, cx| {
+                if !window.is_window_active()
+                    || window.focus.is_none()
+                    || window.focus_generation != target.0
+                {
+                    return false;
+                }
+                let context = self.handler.native_character_context(window, cx);
+                if context != Some(target.1)
+                    || !window.is_window_active()
+                    || window.focus.is_none()
+                    || window.focus_generation != target.0
+                    || !is_current()
+                {
+                    return false;
+                }
+                self.handler
+                    .handle_native_characters(target.1, text, window, cx);
+                true
+            })
+            .unwrap_or(false)
+    }
+
     /// See [`InputHandler::prefers_ime_for_printable_keys`].
     ///
     /// This is not a pure delegation to the handler: while a multi-stroke binding is pending this
@@ -2315,6 +2499,35 @@ pub struct UTF16Selection {
 ///
 /// Text offsets and ranges use UTF-16 code units unless stated otherwise.
 pub trait InputHandler: 'static {
+    /// A stable generation for the logical text target behind this handler.
+    /// Increment when that target changes without moving GPUI focus. Geometry
+    /// updates and handler recreation for a new frame must keep it stable.
+    /// Windows uses this to fence UTF-16 fragments across context changes.
+    fn text_input_context_generation(&mut self, _window: &mut Window, _cx: &mut App) -> u64 {
+        0
+    }
+
+    /// Opt into Windows layout-character delivery without enabling IMM.
+    /// The generation must change whenever the input target becomes stale,
+    /// including an unavailable target followed by the same logical target.
+    /// Ordinary text handlers should retain the default and use the IME path.
+    #[cfg(target_os = "windows")]
+    fn native_character_context(&mut self, _window: &mut Window, _cx: &mut App) -> Option<u64> {
+        None
+    }
+
+    /// Receive one native translation, or its failure, for the captured target.
+    /// This does not describe a remote document or an IME composition.
+    #[cfg(target_os = "windows")]
+    fn handle_native_characters(
+        &mut self,
+        _context: u64,
+        _text: Result<&str, &str>,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) {
+    }
+
     /// Get the range of the user's currently selected text, if any
     /// Corresponds to [selectedRange()](https://developer.apple.com/documentation/appkit/nstextinputclient/1438242-selectedrange)
     ///
@@ -2581,6 +2794,15 @@ pub enum TextInputAction {
 /// The variables that can be configured when creating a new window
 #[derive(Debug)]
 pub struct WindowOptions {
+    /// Use Windows local-file drops instead of OLE for this window's lifetime.
+    /// Starts disabled until a handler and explicit admission are installed.
+    /// Disabling admission never installs an OLE drop target.
+    #[cfg(windows)]
+    pub local_file_drop: bool,
+    /// A visual-only Windows popup forwards mouse hit testing to underlying
+    /// windows on the same UI thread, before its first show. Never activates.
+    #[cfg(windows)]
+    pub mouse_passthrough: bool,
     /// Specifies the state and bounds of the window in screen coordinates.
     /// - `None`: Inherit the bounds.
     /// - `Some(WindowBounds)`: Open a window with corresponding state and its restore size.
@@ -2640,7 +2862,9 @@ pub struct WindowOptions {
     /// Window minimum size
     pub window_min_size: Option<Size<Pixels>>,
 
-    /// Whether to use client or server-side decorations on X11 and Wayland.
+    /// Whether to use client or server-side decorations on X11, Wayland and Windows.
+    /// On Windows, Client gives the app the whole window's drawable area and
+    /// retains native resize hit testing and maximized work-area bounds.
     /// The platform may ignore requests it cannot satisfy.
     pub window_decorations: Option<WindowDecorations>,
 
@@ -2665,6 +2889,12 @@ pub struct WindowOptions {
 )]
 #[allow(missing_docs)]
 pub struct WindowParams {
+    #[cfg(windows)]
+    pub local_file_drop: bool,
+    #[cfg(windows)]
+    pub mouse_passthrough: bool,
+    #[cfg(windows)]
+    pub window_decorations: WindowDecorations,
     pub bounds: Bounds<Pixels>,
 
     /// The titlebar configuration of the window
@@ -2760,6 +2990,10 @@ impl WindowBounds {
 impl Default for WindowOptions {
     fn default() -> Self {
         Self {
+            #[cfg(windows)]
+            local_file_drop: false,
+            #[cfg(windows)]
+            mouse_passthrough: false,
             window_bounds: None,
             titlebar: Some(TitlebarOptions {
                 title: Default::default(),
