@@ -314,6 +314,14 @@ impl TestWindow {
 
 impl PlatformWindow for TestWindow {
     #[cfg(windows)]
+    fn set_native_activation_handler(
+        &self,
+        _: Option<std::rc::Rc<dyn Fn(crate::NativeWindowActivation)>>,
+    ) {
+        // This backend does not dispatch native activation messages.
+    }
+
+    #[cfg(windows)]
     fn set_native_resize_constraint(&self, _: Option<crate::NativeResizeConstraint>) {
         // This backend has no HWND or native sizing loop.
     }

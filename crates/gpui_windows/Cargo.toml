@@ -82,5 +82,8 @@ scap = { workspace = true, optional = true }
 [target.'cfg(target_os = "windows")'.build-dependencies]
 windows-registry = { workspace = true }
 
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+serde_json = { workspace = true }
+
 [lints]
 workspace = true

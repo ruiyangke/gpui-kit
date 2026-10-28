@@ -75,7 +75,7 @@ fn initial_window_styles(
     minimizable: bool,
 ) -> (WINDOW_EX_STYLE, WINDOW_STYLE) {
     if kind == WindowKind::PopUp {
-        return (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WINDOW_STYLE(0x0));
+        return (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WS_POPUP);
     }
     let mut style = window_control_style(WS_SYSMENU, resizable, minimizable, resizable);
     let extended = if kind == WindowKind::Dialog {
@@ -169,6 +169,8 @@ pub struct WindowsWindowState {
 }
 
 pub(crate) struct WindowsWindowInner {
+    is_popup: bool,
+    pub(crate) mouse_passthrough: Cell<bool>,
     hwnd: HWND,
     pub(crate) dialog_owner: Rc<crate::dialog::DialogOwner>,
     drop_target_helper: IDropTargetHelper,
@@ -465,6 +467,8 @@ impl WindowsWindowInner {
         )?;
 
         Ok(Rc::new(Self {
+            is_popup: context.is_popup,
+            mouse_passthrough: Cell::new(context.mouse_passthrough),
             hwnd,
             dialog_owner: crate::dialog::DialogOwner::new(hwnd),
             drop_target_helper: context.drop_target_helper.clone(),
@@ -550,6 +554,10 @@ impl WindowsWindowInner {
             .detach();
     }
 
+    fn can_activate(&self) -> bool {
+        !self.state.closing.get() && !self.mouse_passthrough.get()
+    }
+
     fn set_window_placement(self: &Rc<Self>) -> Result<()> {
         let Some(open_status) = self.state.initial_placement.take() else {
             return Ok(());
@@ -585,6 +593,7 @@ pub(crate) struct Callbacks {
     pub(crate) request_frame: Cell<Option<Box<dyn FnMut(RequestFrameOptions)>>>,
     pub(crate) input: Cell<Option<Box<dyn FnMut(PlatformInput) -> DispatchEventResult>>>,
     pub(crate) active_status_change: Cell<Option<Box<dyn FnMut(bool)>>>,
+    pub(crate) native_activation: RefCell<Option<Rc<dyn Fn(NativeWindowActivation)>>>,
     pub(crate) visibility_change: Cell<Option<Box<dyn FnMut(WindowVisibility)>>>,
     pub(crate) hovered_status_change: Cell<Option<Box<dyn FnMut(bool)>>>,
     pub(crate) resize: Cell<Option<Box<dyn FnMut(Size<Pixels>, f32)>>>,
@@ -597,6 +606,8 @@ pub(crate) struct Callbacks {
 }
 
 struct WindowCreateContext {
+    is_popup: bool,
+    mouse_passthrough: bool,
     inner: Option<Result<Rc<WindowsWindowInner>>>,
     handle: AnyWindowHandle,
     hide_title_bar: bool,
@@ -676,6 +687,10 @@ impl WindowsWindow {
                 .unwrap_or(""),
         );
 
+        let popup = params.kind == WindowKind::PopUp;
+        if params.mouse_passthrough && !popup {
+            anyhow::bail!("Mouse passthrough requires a visual-only popup");
+        }
         let (mut dwexstyle, dwstyle) = initial_window_styles(
             params.kind,
             hide_title_bar,
@@ -684,6 +699,9 @@ impl WindowsWindow {
         );
         if !disable_direct_composition {
             dwexstyle |= WS_EX_NOREDIRECTIONBITMAP;
+        }
+        if params.mouse_passthrough {
+            dwexstyle |= WS_EX_NOACTIVATE;
         }
 
         let hinstance = get_module_handle();
@@ -695,7 +713,22 @@ impl WindowsWindow {
         .or_else(WindowsDisplay::primary_monitor)
         .context("failed to find any monitor")?;
         let appearance = system_appearance().unwrap_or_default();
+        // CW_USEDEFAULT is an overlapped-window policy. Native WS_POPUP windows
+        // (including captioned dialogs) otherwise start at zero size, preventing
+        // the first chrome measurement from observing their actual borders.
+        let initial_bounds = if popup {
+            popup_placement(params.bounds, display.visible_bounds())?
+        } else if display.check_given_bounds(params.bounds) {
+            params.bounds
+        } else {
+            display.default_bounds()
+        };
+        let creation_bounds = dwstyle
+            .contains(WS_POPUP)
+            .then(|| initial_bounds.to_device_pixels(display.scale_factor()));
         let mut context = WindowCreateContext {
+            is_popup: popup,
+            mouse_passthrough: params.mouse_passthrough,
             inner: None,
             handle,
             hide_title_bar,
@@ -725,10 +758,10 @@ impl WindowsWindow {
                 WINDOW_CLASS_NAME,
                 &window_name,
                 dwstyle,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
+                creation_bounds.map_or(CW_USEDEFAULT, |bounds| bounds.origin.x.0),
+                creation_bounds.map_or(CW_USEDEFAULT, |bounds| bounds.origin.y.0),
+                creation_bounds.map_or(CW_USEDEFAULT, |bounds| bounds.size.width.0),
+                creation_bounds.map_or(CW_USEDEFAULT, |bounds| bounds.size.height.0),
                 parent_hwnd,
                 None,
                 Some(hinstance.into()),
@@ -747,10 +780,11 @@ impl WindowsWindow {
         configure_dwm_dark_mode(hwnd, appearance);
         this.state.border_offset.update(hwnd)?;
         let mut placement =
-            retrieve_window_placement(hwnd, display, params.bounds, &this.state.border_offset)?;
+            retrieve_window_placement(hwnd, display, initial_bounds, &this.state.border_offset)?;
         // A newly created HWND reports SW_HIDE. The requested show policy, not
         // that initial native state, determines its first presentation.
-        placement.showCmd = initial_show_command(params.focus).0 as u32;
+        placement.showCmd =
+            initial_show_command(params.focus && !params.mouse_passthrough).0 as u32;
         if params.show {
             unsafe { SetWindowPlacement(hwnd, &placement)? };
         } else {
@@ -780,9 +814,26 @@ impl rwh::HasDisplayHandle for WindowsWindow {
     }
 }
 
+impl WindowsWindowInner {
+    pub(crate) fn notify_native_activation(&self, event: NativeWindowActivation) {
+        let handler = self.state.callbacks.native_activation.borrow().clone();
+        if let Some(handler) = handler {
+            handler(event);
+        }
+    }
+
+    pub(crate) fn retire_native_activation(&self) {
+        let handler = self.state.callbacks.native_activation.take();
+        if let Some(handler) = handler {
+            handler(NativeWindowActivation::Retired);
+        }
+    }
+}
+
 impl Drop for WindowsWindow {
     fn drop(&mut self) {
         self.0.state.closing.set(true);
+        self.0.retire_native_activation();
         self.0.state.resize_constraint.borrow_mut().take();
         self.0.dialog_owner.close();
         unsafe { ShowWindowAsync(self.0.hwnd, SW_HIDE).ok().log_err() };
@@ -911,6 +962,14 @@ impl PlatformWindow for WindowsWindow {
                 }
             })
             .detach();
+    }
+
+    fn set_popup_mouse_passthrough(&self, enabled: bool) {
+        if self.is_popup && !self.state.closing.get() {
+            // Synchronous policy only: metadata updates can hold a GPUI borrow.
+            // No native style mutation or callback may run from this setter.
+            self.mouse_passthrough.set(enabled);
+        }
     }
 
     fn bounds(&self) -> Bounds<Pixels> {
@@ -1114,21 +1173,41 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn activate(&self) {
+        if !self.can_activate() {
+            return;
+        }
         let hwnd = self.0.hwnd;
         let this = self.0.clone();
         self.0
             .executor
             .spawn(async move {
+                // Metadata can revoke activation after this task was queued.
+                if !this.can_activate() {
+                    return;
+                }
                 this.set_window_placement().log_err();
+                if !this.can_activate() {
+                    return;
+                }
 
                 unsafe {
                     // If the window is minimized, restore it.
                     if IsIconic(hwnd).as_bool() {
-                        ShowWindowAsync(hwnd, SW_RESTORE).ok().log_err();
+                        // Execute on the owning UI thread so a later policy
+                        // change cannot be overtaken by an async restore.
+                        let _was_visible = ShowWindow(hwnd, SW_RESTORE);
                     }
-
+                    if !this.can_activate() {
+                        return;
+                    }
                     SetActiveWindow(hwnd).ok();
+                    if !this.can_activate() {
+                        return;
+                    }
                     SetFocus(Some(hwnd)).ok();
+                }
+                if !this.can_activate() {
+                    return;
                 }
 
                 // premium ragebait by windows, this is needed because the window
@@ -1159,6 +1238,9 @@ impl PlatformWindow for WindowsWindow {
                     },
                 ];
                 unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+                if !this.can_activate() {
+                    return;
+                }
 
                 // todo(windows)
                 // crate `windows 0.56` reports true as Err
@@ -1405,6 +1487,16 @@ impl PlatformWindow for WindowsWindow {
                 }
             })
             .detach();
+    }
+
+    fn set_native_activation_handler(&self, handler: Option<Rc<dyn Fn(NativeWindowActivation)>>) {
+        let old = self.state.callbacks.native_activation.replace(handler);
+        if let Some(old) = old {
+            old(NativeWindowActivation::Retired);
+        }
+        if self.state.closing.get() {
+            self.retire_native_activation();
+        }
     }
 
     fn set_native_resize_constraint(&self, constraint: Option<NativeResizeConstraint>) {
@@ -2044,10 +2136,53 @@ fn calculate_client_rect(
     }
 }
 
+/// Move a popup into its selected work area without replacing its content size.
+/// An oversized popup is anchored at the area's origin; its owner decides how
+/// to present or constrain that content, not the generic top-level fallback.
+fn popup_placement(requested: Bounds<Pixels>, work_area: Bounds<Pixels>) -> Result<Bounds<Pixels>> {
+    anyhow::ensure!(
+        [
+            requested.origin.x,
+            requested.origin.y,
+            requested.size.width,
+            requested.size.height,
+            work_area.left(),
+            work_area.top(),
+            work_area.right(),
+            work_area.bottom()
+        ]
+        .into_iter()
+        .all(|value| f32::from(value).is_finite())
+            && requested.size.width > px(0.)
+            && requested.size.height > px(0.)
+            && work_area.size.width > px(0.)
+            && work_area.size.height > px(0.),
+        "Invalid popup placement geometry"
+    );
+    let clamp = |origin: Pixels, start: Pixels, end: Pixels| {
+        px(f32::from(origin).clamp(f32::from(start), f32::from(end).max(f32::from(start))))
+    };
+    Ok(Bounds::new(
+        point(
+            clamp(
+                requested.origin.x,
+                work_area.left(),
+                work_area.right() - requested.size.width,
+            ),
+            clamp(
+                requested.origin.y,
+                work_area.top(),
+                work_area.bottom() - requested.size.height,
+            ),
+        ),
+        requested.size,
+    ))
+}
+
 fn retrieve_window_placement(
     hwnd: HWND,
     display: WindowsDisplay,
-    initial_bounds: Bounds<Pixels>,
+    bounds: Bounds<Pixels>,
     border_offset: &WindowBorderOffset,
 ) -> Result<WINDOWPLACEMENT> {
     let mut placement = WINDOWPLACEMENT {
@@ -2055,17 +2190,13 @@ fn retrieve_window_placement(
         ..Default::default()
     };
     unsafe { GetWindowPlacement(hwnd, &mut placement)? };
-    // the bounds may be not inside the display
-    let bounds = if display.check_given_bounds(initial_bounds) {
-        initial_bounds
-    } else {
-        display.default_bounds()
-    };
+    // Both construction and first show use the same resolved bounds. In
+    // particular, a popup must never re-enter the top-level default-size policy.
     // `bounds` is expressed in logical pixels for `display`, so it must be converted
     // to device pixels using that display's own scale factor. The window's current
-    // scale factor can't be used here: `CreateWindowExW` was called with
-    // `CW_USEDEFAULT`, so at this point the window may still be sitting on whichever
-    // monitor Windows picked by default, which can have a different DPI than `display`
+    // scale factor can't be used here: an overlapped window is created with
+    // `CW_USEDEFAULT`, so it may still be sitting on whichever monitor Windows
+    // picked by default, which can have a different DPI than `display`
     // and would otherwise throw off the physical position (e.g. leaving the window
     // partially off-screen when moved to a monitor with a different scale factor).
     let bounds = bounds.to_device_pixels(display.scale_factor());
@@ -2182,6 +2313,32 @@ mod tests {
     }
 
     #[test]
+    fn popup_fallback_moves_only_the_origin_even_beyond_monitor_edges() {
+        use gpui::{Bounds, point, px, size};
+        let work = Bounds::new(point(px(-1920.), px(-1080.)), size(px(1920.), px(1040.)));
+        for (requested, expected) in [
+            ([-2100., -1200.], [-1920., -1080.]),
+            ([-10., -10.], [-140., -88.]),
+            ([5000., 5000.], [-140., -88.]),
+            ([-1000., -500.], [-1000., -500.]),
+        ] {
+            let bounds = Bounds::new(
+                point(px(requested[0]), px(requested[1])),
+                size(px(140.), px(48.)),
+            );
+            let placed = super::popup_placement(bounds, work).unwrap();
+            assert_eq!(placed.size, bounds.size);
+            assert_eq!(placed.origin, point(px(expected[0]), px(expected[1])));
+        }
+        let oversized = Bounds::new(point(px(0.), px(0.)), size(px(2200.), px(1200.)));
+        let placed = super::popup_placement(oversized, work).unwrap();
+        assert_eq!(placed.size, oversized.size);
+        assert_eq!(placed.origin, work.origin);
+        let invalid = Bounds::new(point(px(f32::NAN), px(0.)), size(px(140.), px(48.)));
+        assert!(super::popup_placement(invalid, work).is_err());
+    }
+
+    #[test]
     fn normal_windows_get_only_the_title_bar_they_requested() {
         let controls = WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX;
         assert_eq!(
@@ -2194,7 +2351,7 @@ mod tests {
         );
         assert_eq!(
             initial_window_styles(WindowKind::PopUp, false, true, true),
-            (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WINDOW_STYLE(0)),
+            (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WS_POPUP),
         );
     }
 

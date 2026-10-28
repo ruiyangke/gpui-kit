@@ -1242,6 +1242,21 @@ pub enum NativeResizeConstraint {
     },
 }
 
+/// Native Windows focus changes delivered before deferred GPUI observers.
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeWindowActivation {
+    /// This window received activation.
+    Activated,
+    /// This window lost activation.
+    Deactivated {
+        /// Destination HWND supplied by the native activation message, if known.
+        next_window: Option<isize>,
+    },
+    /// This registration was replaced or its native window is closing.
+    Retired,
+}
+
 #[expect(missing_docs)]
 pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn bounds(&self) -> Bounds<Pixels>;
@@ -1272,6 +1287,15 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// Replace the immutable native sizing policy; `None` restores platform defaults.
     #[cfg(windows)]
     fn set_native_resize_constraint(&self, _constraint: Option<NativeResizeConstraint>) {}
+    /// Install a pure native focus fence, outside GPUI App/window dispatch.
+    #[cfg(windows)]
+    fn set_native_activation_handler(&self, _handler: Option<Rc<dyn Fn(NativeWindowActivation)>>) {}
+
+    /// Change hit-test passthrough for an existing Windows popup. Other window
+    /// kinds are unchanged. This does not remove an existing no-activate style.
+    #[cfg(windows)]
+    fn set_popup_mouse_passthrough(&self, _enabled: bool) {}
+
     fn scale_factor(&self) -> f32;
     fn appearance(&self) -> WindowAppearance;
     fn display(&self) -> Option<Rc<dyn PlatformDisplay>>;
@@ -2615,6 +2639,10 @@ pub enum TextInputAction {
 /// The variables that can be configured when creating a new window
 #[derive(Debug)]
 pub struct WindowOptions {
+    /// A visual-only Windows popup forwards mouse hit testing to underlying
+    /// windows on the same UI thread, before its first show. Never activates.
+    #[cfg(windows)]
+    pub mouse_passthrough: bool,
     /// Specifies the state and bounds of the window in screen coordinates.
     /// - `None`: Inherit the bounds.
     /// - `Some(WindowBounds)`: Open a window with corresponding state and its restore size.
@@ -2701,6 +2729,8 @@ pub struct WindowOptions {
 )]
 #[allow(missing_docs)]
 pub struct WindowParams {
+    #[cfg(windows)]
+    pub mouse_passthrough: bool,
     #[cfg(windows)]
     pub window_decorations: WindowDecorations,
     pub bounds: Bounds<Pixels>,
@@ -2798,6 +2828,8 @@ impl WindowBounds {
 impl Default for WindowOptions {
     fn default() -> Self {
         Self {
+            #[cfg(windows)]
+            mouse_passthrough: false,
             window_bounds: None,
             titlebar: Some(TitlebarOptions {
                 title: Default::default(),

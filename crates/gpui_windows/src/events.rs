@@ -57,6 +57,14 @@ impl NativeModalLoops {
     }
 }
 
+fn mouse_activate_result(style: u32) -> isize {
+    if style & WS_EX_NOACTIVATE.0 != 0 {
+        MA_NOACTIVATE as isize
+    } else {
+        MA_ACTIVATE as isize
+    }
+}
+
 /// Coordinates window draws on the UI thread. Owned by the platform and
 /// shared with every window (like `WindowsPlatformState::cursor_visible`),
 /// because the coordination is inherently cross-window: while window A is
@@ -118,11 +126,16 @@ impl WindowsWindowInner {
             // whichever window was active before the click. If that handler consumes the
             // press, `DefWindowProc` never sees it, so the window is never activated at all.
             // So, let's eagerly activate the window.
-            WM_MOUSEACTIVATE => Some(MA_ACTIVATE as isize),
+            WM_MOUSEACTIVATE if self.mouse_passthrough.get() => Some(MA_NOACTIVATE as isize),
+            WM_MOUSEACTIVATE => {
+                let style = unsafe { get_window_long(handle, GWL_EXSTYLE) } as u32;
+                Some(mouse_activate_result(style))
+            }
+            WM_NCHITTEST if self.mouse_passthrough.get() => Some(HTTRANSPARENT as isize),
             WM_SYSCOMMAND if wparam.0 as u32 & 0xfff0 == SC_MAXIMIZE && !self.is_maximizable() => {
                 Some(0)
             }
-            WM_ACTIVATE => self.handle_activate_msg(wparam),
+            WM_ACTIVATE => self.handle_activate_msg(wparam, lparam),
             WM_CREATE => self.handle_create_msg(handle),
             WM_MOVE => self.handle_move_msg(handle, lparam),
             WM_SIZE => self.handle_size_msg(wparam, lparam),
@@ -457,6 +470,7 @@ impl WindowsWindowInner {
 
     fn handle_destroy_msg(&self, handle: HWND) -> Option<isize> {
         self.state.closing.set(true);
+        self.retire_native_activation();
         let callback = { self.state.callbacks.close.take() };
         // Re-enable parent window if this was a modal dialog
         if let Some(parent_hwnd) = self.parent_hwnd {
@@ -969,8 +983,15 @@ impl WindowsWindowInner {
         }
     }
 
-    fn handle_activate_msg(self: &Rc<Self>, wparam: WPARAM) -> Option<isize> {
+    fn handle_activate_msg(self: &Rc<Self>, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
         let activated = wparam.loword() > 0;
+        self.notify_native_activation(if activated {
+            NativeWindowActivation::Activated
+        } else {
+            NativeWindowActivation::Deactivated {
+                next_window: (lparam.0 != 0).then_some(lparam.0),
+            }
+        });
 
         let events = self
             .state
@@ -2153,10 +2174,23 @@ mod physical_key_tests {
 
 #[cfg(test)]
 mod native_window_input_tests {
-    use super::NativeModalLoops;
+    use super::{NativeModalLoops, mouse_activate_result};
     use windows::Win32::UI::WindowsAndMessaging::{
-        WM_ENTERMENULOOP, WM_ENTERSIZEMOVE, WM_EXITMENULOOP, WM_EXITSIZEMOVE,
+        MA_ACTIVATE, MA_NOACTIVATE, WM_ENTERMENULOOP, WM_ENTERSIZEMOVE, WM_EXITMENULOOP,
+        WM_EXITSIZEMOVE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
     };
+
+    #[test]
+    fn nonactivating_popups_keep_the_owner_active() {
+        assert_eq!(
+            mouse_activate_result(WS_EX_TOOLWINDOW.0),
+            MA_ACTIVATE as isize
+        );
+        assert_eq!(
+            mouse_activate_result((WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE).0),
+            MA_NOACTIVATE as isize,
+        );
+    }
 
     #[test]
     fn nested_menus_do_not_end_an_interactive_resize() {

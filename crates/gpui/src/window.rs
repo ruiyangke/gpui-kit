@@ -1587,6 +1587,8 @@ impl Window {
         cx: &mut App,
     ) -> Result<Self> {
         let WindowOptions {
+            #[cfg(windows)]
+            mouse_passthrough,
             window_bounds,
             titlebar,
             focus,
@@ -1621,6 +1623,8 @@ impl Window {
         let mut platform_window = cx.platform.open_window(
             handle,
             WindowParams {
+                #[cfg(windows)]
+                mouse_passthrough,
                 #[cfg(windows)]
                 window_decorations: window_decorations.unwrap_or(WindowDecorations::Server),
                 bounds: window_bounds.get_bounds(),
@@ -3021,6 +3025,27 @@ impl Window {
     pub fn set_native_resize_constraint(&self, constraint: Option<crate::NativeResizeConstraint>) {
         self.platform_window
             .set_native_resize_constraint(constraint);
+    }
+
+    /// Fence native Windows focus changes before ordinary activation observers.
+    ///
+    /// The callback must only update independent policy: no GPUI access, native
+    /// calls, I/O, or rendering. Replacement and close retire the old callback.
+    /// It runs without backend callback/state borrows and may retire its owner.
+    #[cfg(windows)]
+    pub fn set_native_activation_handler(
+        &self,
+        handler: Option<Rc<dyn Fn(crate::NativeWindowActivation)>>,
+    ) {
+        self.platform_window.set_native_activation_handler(handler);
+    }
+
+    /// Update a Windows popup's mouse policy without recreating its HWND.
+    /// Enabling blocks mouse hits and activation; disabling restores hit testing
+    /// while preserving native no-activate styles. Other window kinds are unchanged.
+    #[cfg(windows)]
+    pub fn set_popup_mouse_passthrough(&self, enabled: bool) {
+        self.platform_window.set_popup_mouse_passthrough(enabled);
     }
 
     /// Toggle zoom on the window.
