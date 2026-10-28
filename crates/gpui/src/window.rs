@@ -1588,6 +1588,8 @@ impl Window {
     ) -> Result<Self> {
         let WindowOptions {
             #[cfg(windows)]
+            local_file_drop,
+            #[cfg(windows)]
             mouse_passthrough,
             window_bounds,
             titlebar,
@@ -1623,6 +1625,8 @@ impl Window {
         let mut platform_window = cx.platform.open_window(
             handle,
             WindowParams {
+                #[cfg(windows)]
+                local_file_drop,
                 #[cfg(windows)]
                 mouse_passthrough,
                 #[cfg(windows)]
@@ -3058,6 +3062,36 @@ impl Window {
     #[cfg(windows)]
     pub fn set_popup_mouse_passthrough(&self, enabled: bool) {
         self.platform_window.set_popup_mouse_passthrough(enabled);
+    }
+
+    /// Handle owned Windows file-list drops outside native message dispatch.
+    /// `context` only reads independent state and returns `None` when no painted
+    /// target exists. The callback must recheck its context before using the paths.
+    /// This does not participate in GPUI's application-wide active drag.
+    #[cfg(windows)]
+    pub fn on_native_file_drop(
+        &self,
+        context: Rc<dyn Fn() -> Option<u64>>,
+        mut callback: impl FnMut(crate::NativeFileDrop, &mut Window, &mut App) + 'static,
+        cx: &App,
+    ) {
+        let handle = self.handle;
+        let mut cx = cx.to_async();
+        self.platform_window.on_native_file_drop(
+            context,
+            Box::new(move |event| {
+                handle
+                    .update(&mut cx, |_, window, cx| callback(event, window, cx))
+                    .log_err();
+            }),
+        );
+    }
+
+    /// Enable Windows local-file admission for an opt-in window. Disabling also
+    /// invalidates queued native drops; other windows retain their default mode.
+    #[cfg(windows)]
+    pub fn set_native_file_drop_enabled(&self, enabled: bool) {
+        self.platform_window.set_native_file_drop_enabled(enabled);
     }
 
     /// Toggle zoom on the window.

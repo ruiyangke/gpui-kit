@@ -170,8 +170,10 @@ pub struct WindowsWindowState {
 }
 
 pub(crate) struct WindowsWindowInner {
+    pub(crate) local_file_drop: crate::file_drop::LocalFileDrop,
     is_popup: bool,
     pub(crate) mouse_passthrough: Cell<bool>,
+    ole_drop_registered: Cell<bool>,
     hwnd: HWND,
     pub(crate) dialog_owner: Rc<crate::dialog::DialogOwner>,
     drop_target_helper: IDropTargetHelper,
@@ -469,8 +471,10 @@ impl WindowsWindowInner {
         )?;
 
         Ok(Rc::new(Self {
+            local_file_drop: crate::file_drop::LocalFileDrop::new(context.local_file_drop),
             is_popup: context.is_popup,
             mouse_passthrough: Cell::new(context.mouse_passthrough),
+            ole_drop_registered: Cell::new(false),
             hwnd,
             dialog_owner: crate::dialog::DialogOwner::new(hwnd),
             drop_target_helper: context.drop_target_helper.clone(),
@@ -609,6 +613,7 @@ pub(crate) struct Callbacks {
 }
 
 struct WindowCreateContext {
+    local_file_drop: bool,
     is_popup: bool,
     mouse_passthrough: bool,
     inner: Option<Result<Rc<WindowsWindowInner>>>,
@@ -730,6 +735,7 @@ impl WindowsWindow {
             .contains(WS_POPUP)
             .then(|| initial_bounds.to_device_pixels(display.scale_factor()));
         let mut context = WindowCreateContext {
+            local_file_drop: params.local_file_drop,
             is_popup: popup,
             mouse_passthrough: params.mouse_passthrough,
             inner: None,
@@ -778,7 +784,10 @@ impl WindowsWindow {
         let hwnd = creation_result?;
         let this = this.unwrap();
 
-        register_drag_drop(&this)?;
+        if !params.local_file_drop {
+            register_drag_drop(&this)?;
+            this.ole_drop_registered.set(true);
+        }
         set_non_rude_hwnd(hwnd, true);
         configure_dwm_dark_mode(hwnd, appearance);
         this.state.border_offset.update(hwnd)?;
@@ -837,6 +846,7 @@ impl Drop for WindowsWindow {
     fn drop(&mut self) {
         self.0.state.native_character_authority.retire();
         self.0.state.closing.set(true);
+        self.0.local_file_drop.retire(self.0.hwnd);
         self.0.retire_native_activation();
         self.0.state.resize_constraint.borrow_mut().take();
         self.0.dialog_owner.close();
@@ -858,7 +868,9 @@ impl Drop for WindowsWindow {
                 this.dialog_owner.when_idle().await;
                 let handle = this.hwnd;
                 unsafe {
-                    RevokeDragDrop(handle).log_err();
+                    if this.ole_drop_registered.replace(false) {
+                        RevokeDragDrop(handle).log_err();
+                    }
                     DestroyWindow(handle).log_err();
                 }
             })
@@ -976,6 +988,19 @@ impl PlatformWindow for WindowsWindow {
         }
     }
 
+    fn on_native_file_drop(
+        &self,
+        context: Rc<dyn Fn() -> Option<u64>>,
+        callback: Box<dyn FnMut(NativeFileDrop)>,
+    ) {
+        self.0.local_file_drop.install(context, callback);
+    }
+
+    fn set_native_file_drop_enabled(&self, enabled: bool) {
+        self.0
+            .local_file_drop
+            .enable(self.0.hwnd, enabled && !self.0.state.closing.get());
+    }
     fn bounds(&self) -> Bounds<Pixels> {
         self.state.bounds()
     }
@@ -2042,6 +2067,7 @@ unsafe extern "system" fn window_procedure(
     let inner = unsafe { &*ptr };
     let result = if let Some(inner) = inner.upgrade() {
         if msg == WM_NCDESTROY {
+            inner.local_file_drop.retire(hwnd);
             inner.dialog_owner.close();
         }
         inner.handle_msg(hwnd, msg, wparam, lparam)

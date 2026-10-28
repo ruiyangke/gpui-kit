@@ -1257,6 +1257,23 @@ pub enum NativeWindowActivation {
     Retired,
 }
 
+/// An owned Windows file-list drop, captured after release, before asynchronous dispatch.
+/// No source effect (copy, move, or link) is negotiated by this event.
+#[cfg(windows)]
+#[derive(Debug)]
+pub struct NativeFileDrop {
+    /// Exact native paths. Filesystem validation belongs on a bounded worker.
+    pub paths: Vec<std::path::PathBuf>,
+    /// Final client position in logical pixels, never a later cursor sample.
+    pub position: Point<Pixels>,
+    /// Client geometry captured with the drop.
+    pub client_size: Size<Pixels>,
+    /// Scale captured with the drop.
+    pub scale_factor: f32,
+    /// Application context generation captured without entering GPUI.
+    pub context: u64,
+}
+
 #[expect(missing_docs)]
 pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn bounds(&self) -> Bounds<Pixels>;
@@ -1295,6 +1312,19 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// kinds are unchanged. This does not remove an existing no-activate style.
     #[cfg(windows)]
     fn set_popup_mouse_passthrough(&self, _enabled: bool) {}
+
+    /// Register the Windows local-file callback. The context selector must only
+    /// read independent state; it may not enter GPUI, native APIs, or perform I/O.
+    #[cfg(windows)]
+    fn on_native_file_drop(
+        &self,
+        _context: Rc<dyn Fn() -> Option<u64>>,
+        _callback: Box<dyn FnMut(NativeFileDrop)>,
+    ) {
+    }
+    /// Toggle local-file admission, invalidating queued events when disabled.
+    #[cfg(windows)]
+    fn set_native_file_drop_enabled(&self, _enabled: bool) {}
 
     fn scale_factor(&self) -> f32;
     fn appearance(&self) -> WindowAppearance;
@@ -2754,6 +2784,11 @@ pub enum TextInputAction {
 /// The variables that can be configured when creating a new window
 #[derive(Debug)]
 pub struct WindowOptions {
+    /// Use Windows local-file drops instead of OLE for this window's lifetime.
+    /// Starts disabled until a handler and explicit admission are installed.
+    /// Disabling admission never installs an OLE drop target.
+    #[cfg(windows)]
+    pub local_file_drop: bool,
     /// A visual-only Windows popup forwards mouse hit testing to underlying
     /// windows on the same UI thread, before its first show. Never activates.
     #[cfg(windows)]
@@ -2844,6 +2879,8 @@ pub struct WindowOptions {
 )]
 #[allow(missing_docs)]
 pub struct WindowParams {
+    #[cfg(windows)]
+    pub local_file_drop: bool,
     #[cfg(windows)]
     pub mouse_passthrough: bool,
     #[cfg(windows)]
@@ -2943,6 +2980,8 @@ impl WindowBounds {
 impl Default for WindowOptions {
     fn default() -> Self {
         Self {
+            #[cfg(windows)]
+            local_file_drop: false,
             #[cfg(windows)]
             mouse_passthrough: false,
             window_bounds: None,

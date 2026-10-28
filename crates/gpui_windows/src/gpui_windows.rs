@@ -11,6 +11,7 @@ mod directx_renderer;
 mod dispatcher;
 mod display;
 mod events;
+mod file_drop;
 mod keyboard;
 mod native_characters;
 mod native_resize;

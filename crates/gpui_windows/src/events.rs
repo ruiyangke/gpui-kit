@@ -189,7 +189,27 @@ impl WindowsWindowInner {
         self.state
             .native_character_authority
             .observe(msg, wparam, lparam);
+        // A delayed drop must not target a later geometry or activation, even
+        // if a subsequent message restores the same numerical bounds.
+        if matches!(
+            msg,
+            WM_MOVE
+                | WM_SIZE
+                | WM_DPICHANGED
+                | WM_DISPLAYCHANGE
+                | WM_ACTIVATE
+                | WM_KILLFOCUS
+                | WM_SHOWWINDOW
+                | WM_DESTROY
+                | WM_CLOSE
+        ) {
+            self.local_file_drop.invalidate();
+        }
         let handled = match msg {
+            WM_DROPFILES => {
+                self.handle_local_file_drop(windows::Win32::UI::Shell::HDROP(wparam.0 as *mut _));
+                Some(0)
+            }
             // `DefWindowProc` answers `MA_NOACTIVATE` for a left click on `HTCAPTION`.
             // The activation is only triggered when `DefWindowProc` handles the following `WM_NCLBUTTONDOWN`.
             // The GPUI event is dispatched in between, so a click handler runs while `active_window` is still
