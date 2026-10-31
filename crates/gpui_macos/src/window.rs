@@ -650,6 +650,9 @@ struct MacWindowState {
     frame_source: Option<WindowFrameSource>,
     renderer: renderer::Renderer,
     request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
+    // macOS may discard a hidden window's contents. An idle window draws
+    // nothing new, so the next frame after it is shown presents the last one.
+    present_next_frame: bool,
     event_callback: Option<Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>>,
     activate_callback: Option<Box<dyn FnMut(bool)>>,
     visibility_callback: Option<Box<dyn FnMut(WindowVisibility)>>,
@@ -1081,6 +1084,7 @@ impl MacWindow {
                     use_display_p3,
                 ),
                 request_frame_callback: None,
+                present_next_frame: false,
                 event_callback: None,
                 activate_callback: None,
                 visibility_callback: None,
@@ -2995,6 +2999,7 @@ extern "C" fn window_did_change_occlusion_state(this: &AnyObject, _: Sel, _: *mu
         .contains(NSWindowOcclusionState::Visible)
     {
         lock.move_traffic_light();
+        lock.present_next_frame = true;
         lock.start_display_link();
     } else {
         lock.stop_display_link();
@@ -3329,7 +3334,10 @@ extern "C" fn display_layer(this: &AnyObject, _: Sel, _: *mut AnyObject) {
         lock.renderer.set_presents_with_transaction(true);
         lock.stop_display_link();
         drop(lock);
+        // AppKit asks for the layer's contents, which it may have discarded:
+        // present even when nothing changed.
         callback(RequestFrameOptions {
+            require_presentation: true,
             signal_at,
             signal_source: FrameRequestSource::NativeCallback,
             ..Default::default()
@@ -3356,8 +3364,10 @@ extern "C" fn step(view: *mut c_void) {
                 (None, FrameRequestSource::NativeCallback),
                 |(at, source)| (Some(at), source),
             );
+        let require_presentation = mem::take(&mut lock.present_next_frame);
         drop(lock);
         callback(RequestFrameOptions {
+            require_presentation,
             signal_at,
             signal_source,
             ..Default::default()
