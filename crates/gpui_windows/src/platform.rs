@@ -1741,10 +1741,19 @@ fn handle_gpu_device_lost(
         text_system.handle_gpu_lost(&directx_devices)?;
     }
     if let Some(all_windows) = all_windows.upgrade() {
-        for window in all_windows.read().iter() {
+        // The UI thread takes the write lock to add or remove a window, so don't
+        // hold the read lock across a `SendMessageW` that waits for that thread.
+        let windows = || -> SmallVec<[HWND; 4]> {
+            all_windows
+                .read()
+                .iter()
+                .map(TrackedWindow::as_raw)
+                .collect()
+        };
+        for window in windows() {
             unsafe {
                 SendMessageW(
-                    window.as_raw(),
+                    window,
                     WM_GPUI_GPU_DEVICE_LOST,
                     Some(WPARAM(validation_number)),
                     Some(lparam),
@@ -1752,10 +1761,10 @@ fn handle_gpu_device_lost(
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
-        for window in all_windows.read().iter() {
+        for window in windows() {
             unsafe {
                 SendMessageW(
-                    window.as_raw(),
+                    window,
                     WM_GPUI_FORCE_UPDATE_WINDOW,
                     Some(WPARAM(validation_number)),
                     None,
