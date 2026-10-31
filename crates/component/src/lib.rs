@@ -10,6 +10,7 @@ mod element_ext;
 pub mod global_state;
 mod icon;
 mod index_path;
+pub use root::DialogHandle;
 #[cfg(any(feature = "inspector", debug_assertions))]
 mod inspector;
 mod root;
