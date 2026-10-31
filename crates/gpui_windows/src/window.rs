@@ -851,6 +851,12 @@ impl Drop for WindowsWindow {
         // `DestroyWindow` below sends `WM_SHOWWINDOW`; without a callback the
         // resulting visibility report has nothing to notify.
         self.0.state.callbacks.visibility_change.take();
+        // Hiding or destroying an active window deactivates it after GPUI has
+        // already removed it, and the report would find no window.
+        self.0.state.callbacks.active_status_change.take();
+        // Hiding a window under the cursor sends `WM_MOUSELEAVE`, which would
+        // report on a window GPUI has already removed.
+        self.0.state.callbacks.hovered_status_change.take();
         // clone this `Rc` to prevent early release of the pointer
         let this = self.0.clone();
         self.0
