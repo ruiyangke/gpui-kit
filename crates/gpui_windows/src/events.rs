@@ -102,6 +102,8 @@ impl WindowsWindowInner {
             WM_EXITSIZEMOVE | WM_EXITMENULOOP => self.handle_size_move_loop_exit(handle),
             WM_TIMER => self.handle_timer_msg(handle, wparam),
             WM_NCCALCSIZE => self.handle_calc_client_size(handle, wparam, lparam),
+            WM_GETDPISCALEDSIZE => self.handle_get_dpi_scaled_size_msg(handle, wparam, lparam),
+            WM_WINDOWPOSCHANGING => self.handle_window_pos_changing_msg(handle, lparam),
             WM_DPICHANGED => self.handle_dpi_changed_msg(handle, wparam, lparam),
             WM_DISPLAYCHANGE => self.handle_display_change_msg(handle),
             WM_NCHITTEST => self.handle_hit_test_msg(handle, lparam),
@@ -869,6 +871,79 @@ impl WindowsWindowInner {
         } else {
             None
         }
+    }
+
+    /// Windows scales the whole window for a new DPI, native frame included,
+    /// so the client drifts from its logical size. Propose the client scaled
+    /// exactly, plus the frame as it measures at the new DPI.
+    fn handle_get_dpi_scaled_size_msg(
+        &self,
+        handle: HWND,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> Option<isize> {
+        self.dpi_resize.set(None);
+        if self.state.is_maximized()
+            || self.state.is_fullscreen()
+            || unsafe { IsIconic(handle) }.as_bool()
+        {
+            return None;
+        }
+        let mut outer = RECT::default();
+        unsafe { GetWindowRect(handle, &mut outer) }.ok()?;
+        let mut client = RECT::default();
+        unsafe { GetClientRect(handle, &mut client) }.ok()?;
+        let from = unsafe { GetDpiForWindow(handle) };
+        let dpi = wparam.0 as u32;
+        let mut frame = RECT::default();
+        let style = WINDOW_STYLE(unsafe { get_window_long(handle, GWL_STYLE) } as u32);
+        let extended = WINDOW_EX_STYLE(unsafe { get_window_long(handle, GWL_EXSTYLE) } as u32);
+        unsafe { AdjustWindowRectExForDpi(&mut frame, style, false, extended, dpi) }.ok()?;
+        let chrome = crate::native_resize::frame_chrome(
+            [frame.left, frame.top, frame.right, frame.bottom],
+            self.hide_title_bar,
+        )?;
+        let [width, height] = crate::native_resize::dpi_scaled_size(
+            [client.right - client.left, client.bottom - client.top],
+            from,
+            dpi,
+            chrome,
+        )?;
+        // SAFETY: WM_GETDPISCALEDSIZE supplies a writable proposed SIZE.
+        let size = unsafe { &mut *(lparam.0 as *mut SIZE) };
+        size.cx = width;
+        size.cy = height;
+        self.dpi_resize.set(crate::native_resize::DpiResize::new(
+            [outer.right - outer.left, outer.bottom - outer.top],
+            from,
+            dpi,
+            [width, height],
+        ));
+        Some(1)
+    }
+
+    /// After the display change, Windows may place a window again at the
+    /// size it scales the old window to on its own, undoing the
+    /// WM_GETDPISCALEDSIZE answer; keep the answer instead.
+    fn handle_window_pos_changing_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
+        let resize = self.dpi_resize.get()?;
+        // SAFETY: WM_WINDOWPOSCHANGING supplies a writable WINDOWPOS.
+        let position = unsafe { &mut *(lparam.0 as *mut WINDOWPOS) };
+        if position.flags.0 & SWP_NOSIZE.0 != 0 {
+            return None;
+        }
+        match resize.place(
+            unsafe { GetDpiForWindow(handle) },
+            [position.cx, position.cy],
+        ) {
+            crate::native_resize::DpiPlacement::Keep => {}
+            crate::native_resize::DpiPlacement::Replace([width, height]) => {
+                position.cx = width;
+                position.cy = height;
+            }
+            crate::native_resize::DpiPlacement::End => self.dpi_resize.set(None),
+        }
+        None
     }
 
     fn handle_dpi_changed_msg(
