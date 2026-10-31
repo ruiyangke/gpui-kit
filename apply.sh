@@ -1,7 +1,8 @@
 #!/bin/sh
-# Generate newport/<tag> from an upstream GPUI Kit tag and this series.
+# Generate newport/<tag> from a base tag and a patch series.
 #
-#   ./apply.sh <tag> [branch]
+#   ./apply.sh <tag> [branch]          GPUI Kit: series, patches/
+#   ./apply.sh gpui <tag> [branch]     GPUI snapshot: gpui/series, gpui/patches/
 #
 # Each patch becomes one commit with the patch's author, date and message.
 # The committer is set to the author, so the same series on the same tag
@@ -9,9 +10,14 @@
 # are built on a temporary index, and only the branch ref is written.
 set -eu
 
-tag=${1:?usage: ./apply.sh <tag> [branch]}
-branch=${2:-newport/$tag}
 here=$(cd "$(dirname "$0")" && pwd)
+series=$here
+if [ "${1:-}" = gpui ]; then
+    series=$here/gpui
+    shift
+fi
+tag=${1:?usage: ./apply.sh [gpui] <tag> [branch]}
+branch=${2:-newport/$tag}
 
 if git -C "$here" worktree list --porcelain | grep -qx "branch refs/heads/$branch"; then
     echo "$branch is checked out in a worktree; switch it away first." >&2
@@ -36,7 +42,7 @@ field() {
 while read -r patch; do
     case $patch in '' | '#'*) continue ;; esac
     git -C "$here" mailinfo "$scratch/message" "$scratch/diff" \
-        <"$here/patches/$patch" >"$scratch/info"
+        <"$series/patches/$patch" >"$scratch/info"
     if ! git -C "$here" apply --cached "$scratch/diff"; then
         echo "$patch does not apply to $tag." >&2
         echo "Fix it on a branch, then run ./export.sh (see README.md)." >&2
@@ -58,7 +64,7 @@ while read -r patch; do
             git -C "$here" commit-tree "$tree" -p "$parent"
     )
     echo "$(git -C "$here" rev-parse --short "$parent") $patch"
-done <"$here/series"
+done <"$series/series"
 
 git -C "$here" update-ref "refs/heads/$branch" "$parent"
 echo "$branch -> $(git -C "$here" rev-parse --short "$parent")"

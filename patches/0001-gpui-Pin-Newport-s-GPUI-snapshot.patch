@@ -1,25 +1,28 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ruiyangke <me@ry.ke>
-Date: Tue, 20 Oct 2026 15:04:50 -0700
-Subject: [PATCH] gpui: Pin the terminal keyboard snapshot
+Date: Sat, 31 Oct 2026 00:00:00 -0700
+Subject: [PATCH] gpui: Pin Newport's GPUI snapshot
 
-Pin the six gpui-pre 0.3.9 crates to ruiyangke/gpui-kit@ab40fa8 (branch
-codex/gpui-terminal-snapshot). That snapshot is the same Zed revision as
-gpui-pre 0.3.9 (93d7456), built with upstream's snapshot generator, plus
-terminal-keyboard.patch.
+Pin the six gpui-pre 0.3.10 crates to ruiyangke/gpui-kit@5814f246
+(branch newport/gpui-pre-v0.3.10). That branch is gpui-pre 0.3.10 (Zed
+08cbb88) as GPUI Kit's generator stages it, plus Newport's GPUI patch
+series in gpui/ on newport/patches.
 
-The patch adds an optional physical key and native layout metadata (original
+The series adds an optional physical key and native layout metadata (original
 key text, raw modifiers, lock states) to KeyDownEvent and KeyUpEvent, and
 Window::numlock(). Newport's terminal needs them to encode keys the way a
 terminal expects; GPUI's shortcut-oriented Keystroke drops them. Synthetic
 events leave the fields empty, so shortcut dispatch is unchanged. Kit's event
 constructors initialize the new fields; the gpui-fast backend is untouched.
+The series also adds the Windows window, text input and file-drop hooks that
+Newport's remote windows use; other platforms are unchanged.
 
-Remove when GPUI exposes physical keys and layout metadata on key events.
+Remove when GPUI exposes physical keys and layout metadata on key events and
+the Windows hooks are upstream.
 ---
- Cargo.lock                                    | 524 ++++++++++++++----
+ Cargo.lock                                    | 587 ++++++++++++++----
  Cargo.toml                                    |  12 +-
- crates/base/src/button.rs                     |  12 +-
+ crates/base/src/button.rs                     |  24 +-
  crates/base/src/checkbox.rs                   |  12 +-
  crates/base/src/dialog.rs                     |  12 +-
  crates/base/src/link.rs                       |  12 +-
@@ -27,7 +30,7 @@ Remove when GPUI exposes physical keys and layout metadata on key events.
  crates/base/src/switch.rs                     |  12 +-
  crates/base/src/toggle.rs                     |  12 +-
  crates/component/src/attachment.rs            |  12 +-
- crates/component/src/button/button.rs         |  12 +-
+ crates/component/src/button/button.rs         |  24 +-
  crates/component/src/button/button_group.rs   |  12 +-
  crates/component/src/button/toggle.rs         |  12 +-
  crates/component/src/carousel/carousel.rs     |  12 +-
@@ -38,60 +41,59 @@ Remove when GPUI exposes physical keys and layout metadata on key events.
  crates/kit/src/test.rs                        |  16 +-
  crates/kit/src/test/events.rs                 |  16 +-
  crates/kit/tests/integration/menu.rs          |  16 +-
- crates/shell/src/tests/render.rs              |   4 +
- 22 files changed, 663 insertions(+), 133 deletions(-)
+ 21 files changed, 740 insertions(+), 139 deletions(-)
 
 diff --git a/Cargo.lock b/Cargo.lock
-index 1124dc36..690a2f2d 100644
+index 32ec03fa..d6e6d096 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -3815,11 +3815,11 @@ dependencies = [
+@@ -3792,11 +3792,11 @@ dependencies = [
   "futures",
   "gpui-fast",
   "gpui-fast-platform",
 - "gpui-pre",
 - "gpui-pre-macros",
-+ "gpui-pre 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-macros 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-macros 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "gpui-pre-platform",
   "gpui-pre-reqwest-client",
 - "gpui-pre-sum-tree",
-+ "gpui-pre-sum-tree 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre-sum-tree 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "html5ever 0.27.0",
   "indoc",
   "instant",
-@@ -3855,7 +3855,7 @@ dependencies = [
+@@ -3832,7 +3832,7 @@ dependencies = [
   "gpui-base",
   "gpui-fast",
   "gpui-fast-platform",
 - "gpui-pre",
-+ "gpui-pre 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "gpui-pre-platform",
   "gpui-pre-reqwest-client",
   "syntect",
-@@ -3871,7 +3871,7 @@ dependencies = [
+@@ -3848,7 +3848,7 @@ dependencies = [
   "gpui-base",
   "gpui-fast",
   "gpui-fast-platform",
 - "gpui-pre",
-+ "gpui-pre 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "gpui-pre-platform",
   "gpui-pre-reqwest-client",
   "log",
-@@ -3894,9 +3894,9 @@ dependencies = [
+@@ -3871,9 +3871,9 @@ dependencies = [
   "gpui-component-macros",
   "gpui-fast",
   "gpui-kit-assets",
 - "gpui-pre",
 - "gpui-pre-macros",
 - "gpui-pre-sum-tree",
-+ "gpui-pre 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-macros 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-sum-tree 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-macros 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-sum-tree 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "indoc",
   "instant",
   "itertools 0.13.0",
-@@ -4046,14 +4046,14 @@ dependencies = [
+@@ -4023,14 +4023,14 @@ dependencies = [
   "futures-concurrency",
   "getrandom 0.3.4",
   "gpui-fast-macros",
@@ -103,18 +105,18 @@ index 1124dc36..690a2f2d 100644
 - "gpui-pre-shared-string",
 - "gpui-pre-sum-tree",
 - "gpui-pre-util",
-+ "gpui-pre-bench-metrics 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-collections 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-http-client 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-refineable 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-scheduler 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-shared-string 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-sum-tree 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-util 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-bench-metrics 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-collections 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-http-client 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-refineable 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-scheduler 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-shared-string 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-sum-tree 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-util 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
   "hdrhistogram",
   "heapless",
   "image",
-@@ -4093,7 +4093,7 @@ dependencies = [
+@@ -4070,7 +4070,7 @@ dependencies = [
   "waker-fn",
   "web-time",
   "windows 0.62.2",
@@ -123,18 +125,18 @@ index 1124dc36..690a2f2d 100644
  ]
  
  [[package]]
-@@ -4116,8 +4116,8 @@ dependencies = [
+@@ -4093,8 +4093,8 @@ dependencies = [
   "foreign-types",
   "futures",
   "gpui-fast",
 - "gpui-pre-collections",
 - "gpui-pre-util",
-+ "gpui-pre-collections 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-util 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-collections 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-util 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
   "image",
   "libc",
   "log",
-@@ -4135,7 +4135,7 @@ dependencies = [
+@@ -4112,7 +4112,7 @@ dependencies = [
   "pathfinder_geometry",
   "smallvec",
   "thiserror 2.0.20",
@@ -143,20 +145,25 @@ index 1124dc36..690a2f2d 100644
  ]
  
  [[package]]
-@@ -4156,9 +4156,9 @@ dependencies = [
+@@ -4133,13 +4133,13 @@ dependencies = [
   "futures",
   "gpui-fast",
   "gpui-fast-wgpu",
 - "gpui-pre-collections",
 - "gpui-pre-http-client",
 - "gpui-pre-util",
-+ "gpui-pre-collections 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-http-client 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-util 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-collections 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-http-client 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-util 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
   "libc",
   "log",
   "notify-rust",
-@@ -4179,8 +4179,8 @@ dependencies = [
+- "oo7",
++ "oo7 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
+  "open",
+  "parking_lot",
+  "raw-window-handle",
+@@ -4156,8 +4156,8 @@ dependencies = [
   "wayland-protocols-wlr",
   "x11rb",
   "xkbcommon",
@@ -167,31 +174,40 @@ index 1124dc36..690a2f2d 100644
  ]
  
  [[package]]
-@@ -4203,9 +4203,9 @@ dependencies = [
+@@ -4179,9 +4179,9 @@ dependencies = [
   "futures",
   "gpui-fast",
   "gpui-fast-apple",
 - "gpui-pre-collections",
 - "gpui-pre-scheduler",
 - "gpui-pre-util",
-+ "gpui-pre-collections 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-scheduler 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-util 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-collections 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-scheduler 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-util 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
   "image",
   "itertools 0.14.0",
   "log",
-@@ -4264,8 +4264,8 @@ dependencies = [
+@@ -4225,7 +4225,7 @@ dependencies = [
+  "gpui-fast-web",
+  "gpui-fast-wgpu",
+  "gpui-fast-windows",
+- "gpui-pre-ios",
++ "gpui-pre-ios 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
+ ]
+ 
+ [[package]]
+@@ -4240,8 +4240,8 @@ dependencies = [
   "futures",
   "gpui-fast",
   "gpui-fast-wgpu",
 - "gpui-pre-http-client",
 - "gpui-pre-scheduler",
-+ "gpui-pre-http-client 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-scheduler 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-http-client 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-scheduler 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
   "js-sys",
   "log",
   "parking_lot",
-@@ -4277,7 +4277,7 @@ dependencies = [
+@@ -4253,7 +4253,7 @@ dependencies = [
   "uuid",
   "wasm-bindgen",
   "wasm-bindgen-futures",
@@ -200,72 +216,72 @@ index 1124dc36..690a2f2d 100644
   "web-sys",
   "web-time",
  ]
-@@ -4293,8 +4293,8 @@ dependencies = [
+@@ -4269,8 +4269,8 @@ dependencies = [
   "cosmic-text",
   "etagere",
   "gpui-fast",
 - "gpui-pre-collections",
 - "gpui-pre-util",
-+ "gpui-pre-collections 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-util 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-collections 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-util 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
   "image",
   "itertools 0.14.0",
   "log",
-@@ -4307,7 +4307,7 @@ dependencies = [
+@@ -4283,7 +4283,7 @@ dependencies = [
   "unicode-segmentation",
   "web-sys",
-  "wgpu 30.0.1",
+  "wgpu",
 - "zed-font-kit",
 + "zed-font-kit 0.14.1-zed (registry+https://github.com/rust-lang/crates.io-index)",
  ]
  
  [[package]]
-@@ -4323,9 +4323,9 @@ dependencies = [
+@@ -4299,9 +4299,9 @@ dependencies = [
   "etagere",
   "futures",
   "gpui-fast",
 - "gpui-pre-collections",
 - "gpui-pre-scheduler",
 - "gpui-pre-util",
-+ "gpui-pre-collections 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-scheduler 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-util 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-collections 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-scheduler 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-util 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
   "image",
   "itertools 0.14.0",
   "log",
-@@ -4346,7 +4346,7 @@ version = "0.8.0"
+@@ -4322,7 +4322,7 @@ version = "0.8.1"
  dependencies = [
   "core-graphics 0.24.0",
   "gpui-fast",
 - "gpui-pre",
-+ "gpui-pre 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "libc",
   "objc2-core-foundation",
   "objc2-io-kit",
-@@ -4368,8 +4368,8 @@ dependencies = [
+@@ -4344,8 +4344,8 @@ dependencies = [
   "gpui-fast-platform",
   "gpui-fast-web",
   "gpui-kit-assets",
 - "gpui-pre",
 - "gpui-pre-macros",
-+ "gpui-pre 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-macros 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-macros 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "gpui-pre-platform",
   "gpui-pre-web",
   "lsp-types 0.97.0",
-@@ -4382,7 +4382,7 @@ dependencies = [
+@@ -4358,7 +4358,7 @@ dependencies = [
   "anyhow",
   "gpui-fast",
   "gpui-fast-platform",
 - "gpui-pre",
-+ "gpui-pre 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "gpui-pre-platform",
   "gpui-pre-reqwest",
   "log",
-@@ -4403,6 +4403,68 @@ name = "gpui-pre"
- version = "0.3.9"
+@@ -4379,6 +4379,68 @@ name = "gpui-pre"
+ version = "0.3.10"
  source = "registry+https://github.com/rust-lang/crates.io-index"
- checksum = "34f61c1cfd36fc9c436af09308c963822ae27a45a84feb21a77ba5c9e051f1c0"
+ checksum = "df4b5f8d0c278308df2f11e0bfe0212dd77d7848ce1bdc4b9d513334414396f6"
 +dependencies = [
 + "accesskit",
 + "anyhow",
@@ -279,14 +295,14 @@ index 1124dc36..690a2f2d 100644
 + "etagere",
 + "futures",
 + "getrandom 0.3.4",
-+ "gpui-pre-collections 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-http-client 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-macros 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-refineable 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-scheduler 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-shared-string 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-sum-tree 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-util 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-collections 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-http-client 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-macros 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-refineable 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-scheduler 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-shared-string 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-sum-tree 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-util 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
 + "heapless",
 + "image",
 + "inventory",
@@ -314,7 +330,7 @@ index 1124dc36..690a2f2d 100644
 + "smallvec",
 + "spin 0.10.1",
 + "strum",
-+ "taffy 0.13.0",
++ "taffy",
 + "thiserror 2.0.20",
 + "ttf-parser",
 + "url",
@@ -326,12 +342,12 @@ index 1124dc36..690a2f2d 100644
 +
 +[[package]]
 +name = "gpui-pre"
-+version = "0.3.9"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
++version = "0.3.10"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
  dependencies = [
   "accesskit",
   "anyhow",
-@@ -4419,15 +4481,15 @@ dependencies = [
+@@ -4395,15 +4457,15 @@ dependencies = [
   "futures",
   "futures-concurrency",
   "getrandom 0.3.4",
@@ -344,19 +360,19 @@ index 1124dc36..690a2f2d 100644
 - "gpui-pre-shared-string",
 - "gpui-pre-sum-tree",
 - "gpui-pre-util",
-+ "gpui-pre-bench-metrics 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-collections 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-http-client 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-macros 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-refineable 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-scheduler 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-shared-string 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-sum-tree 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-util 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre-bench-metrics 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-http-client 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-macros 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-refineable 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-scheduler 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-shared-string 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-sum-tree 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "hdrhistogram",
   "heapless",
   "image",
-@@ -4467,7 +4529,7 @@ dependencies = [
+@@ -4443,7 +4505,7 @@ dependencies = [
   "waker-fn",
   "web-time",
   "windows 0.62.2",
@@ -365,16 +381,48 @@ index 1124dc36..690a2f2d 100644
  ]
  
  [[package]]
-@@ -4489,9 +4551,50 @@ dependencies = [
+@@ -4465,9 +4527,9 @@ dependencies = [
   "etagere",
   "foreign-types",
   "futures",
 - "gpui-pre",
 - "gpui-pre-collections",
 - "gpui-pre-util",
-+ "gpui-pre 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-collections 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-util 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-collections 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-util 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
+  "image",
+  "libc",
+  "log",
+@@ -4485,7 +4547,48 @@ dependencies = [
+  "pathfinder_geometry",
+  "smallvec",
+  "thiserror 2.0.20",
+- "zed-font-kit",
++ "zed-font-kit 0.14.1-zed (registry+https://github.com/rust-lang/crates.io-index)",
++]
++
++[[package]]
++name = "gpui-pre-apple"
++version = "0.3.10"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++dependencies = [
++ "anyhow",
++ "async-task",
++ "block2 0.6.2",
++ "cbindgen",
++ "core-foundation 0.10.1",
++ "core-foundation-sys 0.8.7",
++ "core-graphics 0.24.0",
++ "core-text",
++ "derive_more 2.1.1",
++ "dispatch2",
++ "etagere",
++ "foreign-types",
++ "futures",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
 + "image",
 + "libc",
 + "log",
@@ -392,50 +440,18 @@ index 1124dc36..690a2f2d 100644
 + "pathfinder_geometry",
 + "smallvec",
 + "thiserror 2.0.20",
-+ "zed-font-kit 0.14.1-zed (registry+https://github.com/rust-lang/crates.io-index)",
-+]
-+
-+[[package]]
-+name = "gpui-pre-apple"
-+version = "0.3.9"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
-+dependencies = [
-+ "anyhow",
-+ "async-task",
-+ "block2 0.6.2",
-+ "cbindgen",
-+ "core-foundation 0.10.1",
-+ "core-foundation-sys 0.8.7",
-+ "core-graphics 0.24.0",
-+ "core-text",
-+ "derive_more 2.1.1",
-+ "dispatch2",
-+ "etagere",
-+ "foreign-types",
-+ "futures",
-+ "gpui-pre 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-collections 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-util 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-  "image",
-  "libc",
-  "log",
-@@ -4509,7 +4612,7 @@ dependencies = [
-  "pathfinder_geometry",
-  "smallvec",
-  "thiserror 2.0.20",
-- "zed-font-kit",
 + "zed-font-kit 0.14.1-zed (git+https://github.com/zed-industries/font-kit?rev=94b0f28166665e8fd2f53ff6d268a14955c82269)",
  ]
  
  [[package]]
-@@ -4524,13 +4627,34 @@ dependencies = [
+@@ -4500,13 +4603,34 @@ dependencies = [
   "perf-event2",
  ]
  
 +[[package]]
 +name = "gpui-pre-bench-metrics"
-+version = "0.3.9"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
++version = "0.3.10"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
 +dependencies = [
 + "anyhow",
 + "criterion",
@@ -445,33 +461,33 @@ index 1124dc36..690a2f2d 100644
 +
  [[package]]
  name = "gpui-pre-collections"
- version = "0.3.9"
+ version = "0.3.10"
  source = "registry+https://github.com/rust-lang/crates.io-index"
- checksum = "920c2f5b2f1a7813114d89f4841f26f6060d9c35d7c8a852a4205d1a767a7ce0"
+ checksum = "8f89bf8941a7437dd761161c552543fb8268b9633fe74e29eafbe0014cd2164b"
  dependencies = [
 - "gpui-pre-util",
-+ "gpui-pre-util 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-util 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
 + "indexmap",
 + "rustc-hash 2.1.3",
 +]
 +
 +[[package]]
 +name = "gpui-pre-collections"
-+version = "0.3.9"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
++version = "0.3.10"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
 +dependencies = [
-+ "gpui-pre-util 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "indexmap",
   "rustc-hash 2.1.3",
  ]
-@@ -4546,6 +4670,16 @@ dependencies = [
+@@ -4522,6 +4646,16 @@ dependencies = [
   "syn 2.0.119",
  ]
  
 +[[package]]
 +name = "gpui-pre-derive-refineable"
-+version = "0.3.9"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
++version = "0.3.10"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
 +dependencies = [
 + "proc-macro2",
 + "quote",
@@ -480,15 +496,15 @@ index 1124dc36..690a2f2d 100644
 +
  [[package]]
  name = "gpui-pre-http-client"
- version = "0.3.9"
-@@ -4565,11 +4699,28 @@ dependencies = [
+ version = "0.3.10"
+@@ -4541,11 +4675,28 @@ dependencies = [
   "url",
  ]
  
 +[[package]]
 +name = "gpui-pre-http-client"
-+version = "0.3.9"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
++version = "0.3.10"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
 +dependencies = [
 + "anyhow",
 + "bytes",
@@ -505,35 +521,56 @@ index 1124dc36..690a2f2d 100644
 +
  [[package]]
  name = "gpui-pre-http-client-tls"
- version = "0.3.9"
+ version = "0.3.10"
 -source = "registry+https://github.com/rust-lang/crates.io-index"
--checksum = "b7616a90ec92c9832bbc80ddab34e10fdf8d23520d5cbb0b432b73e4e9f6c812"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
+-checksum = "13a487328e5cf704b44f3e6ca0b86b7688f2c488ce66cace071e713df94810d7"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
  dependencies = [
   "log",
   "rustls",
-@@ -4586,8 +4737,8 @@ dependencies = [
+@@ -4562,8 +4713,29 @@ dependencies = [
   "anyhow",
   "block2 0.6.2",
   "futures",
 - "gpui-pre",
 - "gpui-pre-apple",
-+ "gpui-pre 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
-+ "gpui-pre-apple 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-apple 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
++ "log",
++ "objc2 0.6.4",
++ "objc2-core-foundation",
++ "objc2-foundation 0.3.2",
++ "objc2-quartz-core 0.3.2",
++ "objc2-ui-kit",
++ "parking_lot",
++ "raw-window-handle",
++ "uuid",
++]
++
++[[package]]
++name = "gpui-pre-ios"
++version = "0.3.10"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++dependencies = [
++ "anyhow",
++ "block2 0.6.2",
++ "futures",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-apple 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "log",
   "objc2 0.6.4",
   "objc2-core-foundation",
-@@ -4602,8 +4753,7 @@ dependencies = [
+@@ -4578,8 +4750,7 @@ dependencies = [
  [[package]]
  name = "gpui-pre-linux"
- version = "0.3.9"
+ version = "0.3.10"
 -source = "registry+https://github.com/rust-lang/crates.io-index"
--checksum = "e28213c3fde6f13e91ba0b74b90cbaadec9373e36a031eda98561d31059870f3"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
+-checksum = "7c6ffd2dce7b75cce0bb3382994912f84c2a05389a4a236bb8bd72cb098fc083"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
  dependencies = [
   "accesskit",
   "accesskit_unix",
-@@ -4615,10 +4765,10 @@ dependencies = [
+@@ -4591,15 +4762,15 @@ dependencies = [
   "calloop-wayland-source",
   "filedescriptor",
   "futures",
@@ -541,14 +578,20 @@ index 1124dc36..690a2f2d 100644
 - "gpui-pre-collections",
 - "gpui-pre-http-client",
 - "gpui-pre-util",
-+ "gpui-pre 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-collections 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-http-client 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-util 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-http-client 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "gpui-pre-wgpu",
   "libc",
   "log",
-@@ -4640,15 +4790,14 @@ dependencies = [
+  "notify-rust",
+- "oo7",
++ "oo7 0.6.0 (git+https://github.com/zed-industries/oo7?rev=731c1215edb6905876c6137ab300428c7b8d7c13)",
+  "open",
+  "parking_lot",
+  "raw-window-handle",
+@@ -4616,15 +4787,14 @@ dependencies = [
   "wayland-protocols-wlr",
   "x11rb",
   "xkbcommon",
@@ -560,14 +603,14 @@ index 1124dc36..690a2f2d 100644
  
  [[package]]
  name = "gpui-pre-macos"
- version = "0.3.9"
+ version = "0.3.10"
 -source = "registry+https://github.com/rust-lang/crates.io-index"
--checksum = "c7c988b7e49775cc8542dbe48d5a10e073d8e898a023ef3ff3d24f33363e9863"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
+-checksum = "7e07a5e5c84f0b2160c194a1c852cc89d1942db66867938ceabcd7f763cb4386"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
  dependencies = [
   "accesskit",
   "accesskit_macos",
-@@ -4662,11 +4811,11 @@ dependencies = [
+@@ -4637,11 +4807,11 @@ dependencies = [
   "dispatch2",
   "foreign-types",
   "futures",
@@ -576,22 +619,22 @@ index 1124dc36..690a2f2d 100644
 - "gpui-pre-collections",
 - "gpui-pre-scheduler",
 - "gpui-pre-util",
-+ "gpui-pre 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-apple 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-collections 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-scheduler 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-util 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-apple 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-scheduler 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "image",
   "itertools 0.14.0",
   "log",
-@@ -4697,15 +4846,26 @@ dependencies = [
+@@ -4672,16 +4842,27 @@ dependencies = [
   "syn 2.0.119",
  ]
  
 +[[package]]
 +name = "gpui-pre-macros"
-+version = "0.3.9"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
++version = "0.3.10"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
 +dependencies = [
 + "heck 0.5.0",
 + "proc-macro-crate 3.5.0",
@@ -602,56 +645,58 @@ index 1124dc36..690a2f2d 100644
 +
  [[package]]
  name = "gpui-pre-platform"
- version = "0.3.9"
+ version = "0.3.10"
 -source = "registry+https://github.com/rust-lang/crates.io-index"
--checksum = "bbdbdac421178313fed8929fe95b42634a266a735079fcf03ff231bc2ccb2c5e"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
+-checksum = "e8a7f07a15187e82ec76491492c7e3245db1b59633d3bedb00b828ffaf67c4b8"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
  dependencies = [
   "anyhow",
   "console_error_panic_hook",
 - "gpui-pre",
-+ "gpui-pre 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
+- "gpui-pre-ios",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-ios 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "gpui-pre-linux",
   "gpui-pre-macos",
   "gpui-pre-web",
-@@ -4719,7 +4879,15 @@ version = "0.3.9"
+@@ -4695,7 +4876,15 @@ version = "0.3.10"
  source = "registry+https://github.com/rust-lang/crates.io-index"
- checksum = "237703b3b219d11adb50dd33bb0fcca3d34fc001623b3143e72cb051d0fb3777"
+ checksum = "4ce7e83592bc6c1ead2affd91b333f11b60c3eb7d06cae1605dd56f149fe8674"
  dependencies = [
 - "gpui-pre-derive-refineable",
-+ "gpui-pre-derive-refineable 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-derive-refineable 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
 +]
 +
 +[[package]]
 +name = "gpui-pre-refineable"
-+version = "0.3.9"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
++version = "0.3.10"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
 +dependencies = [
-+ "gpui-pre-derive-refineable 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre-derive-refineable 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
  ]
  
  [[package]]
-@@ -4776,16 +4944,15 @@ dependencies = [
+@@ -4752,16 +4941,15 @@ dependencies = [
  [[package]]
  name = "gpui-pre-reqwest-client"
- version = "0.3.9"
+ version = "0.3.10"
 -source = "registry+https://github.com/rust-lang/crates.io-index"
--checksum = "92c2e70dc8550d60324b1eb3f3d08b4ccf20a8b577a9a42732dd3bafb2363bc0"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
+-checksum = "ca7eada23ad3c3cff486fd7ab5d92abb82236188cca61cde708adf54cb436226"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
  dependencies = [
   "anyhow",
   "bytes",
   "futures",
 - "gpui-pre-http-client",
-+ "gpui-pre-http-client 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre-http-client 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "gpui-pre-http-client-tls",
   "gpui-pre-reqwest",
 - "gpui-pre-util",
-+ "gpui-pre-util 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "log",
   "regex",
   "tokio",
-@@ -4804,7 +4971,23 @@ dependencies = [
+@@ -4780,7 +4968,23 @@ dependencies = [
   "futures",
   "parking_lot",
   "rand 0.9.5",
@@ -662,8 +707,8 @@ index 1124dc36..690a2f2d 100644
 +
 +[[package]]
 +name = "gpui-pre-scheduler"
-+version = "0.3.9"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
++version = "0.3.10"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
 +dependencies = [
 + "async-task",
 + "backtrace",
@@ -676,14 +721,14 @@ index 1124dc36..690a2f2d 100644
   "web-time",
  ]
  
-@@ -4819,13 +5002,34 @@ dependencies = [
+@@ -4795,13 +4999,34 @@ dependencies = [
   "smol_str",
  ]
  
 +[[package]]
 +name = "gpui-pre-shared-string"
-+version = "0.3.9"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
++version = "0.3.10"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
 +dependencies = [
 + "schemars",
 + "serde",
@@ -692,12 +737,12 @@ index 1124dc36..690a2f2d 100644
 +
  [[package]]
  name = "gpui-pre-sum-tree"
- version = "0.3.9"
+ version = "0.3.10"
  source = "registry+https://github.com/rust-lang/crates.io-index"
- checksum = "aadb3bd3da22617e2158b1842f5a9c29c1626c926ad0686163ced1a009963ff3"
+ checksum = "c1ce66c57e9b5fd6c7a90fa9f9de2f9bb342127d670ca3c8fe5885270079eefa"
  dependencies = [
 - "gpui-pre-ztracing",
-+ "gpui-pre-ztracing 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-ztracing 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
 + "heapless",
 + "rayon",
 + "tracing",
@@ -705,21 +750,21 @@ index 1124dc36..690a2f2d 100644
 +
 +[[package]]
 +name = "gpui-pre-sum-tree"
-+version = "0.3.9"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
++version = "0.3.10"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
 +dependencies = [
-+ "gpui-pre-ztracing 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre-ztracing 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "heapless",
   "rayon",
   "tracing",
-@@ -4842,19 +5046,28 @@ dependencies = [
+@@ -4818,19 +5043,28 @@ dependencies = [
   "which",
  ]
  
 +[[package]]
 +name = "gpui-pre-util"
-+version = "0.3.9"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
++version = "0.3.10"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
 +dependencies = [
 + "anyhow",
 + "log",
@@ -728,10 +773,10 @@ index 1124dc36..690a2f2d 100644
 +
  [[package]]
  name = "gpui-pre-web"
- version = "0.3.9"
+ version = "0.3.10"
 -source = "registry+https://github.com/rust-lang/crates.io-index"
--checksum = "aedd55b99dc77e28df8202b0ea868aa5c90fda4aefff539ea21087d7c2ff4bfb"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
+-checksum = "1acd86af2347f0dd8b63c441a5dbd43b3fcd7dac69b340827c3497da5a13d6fb"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
  dependencies = [
   "anyhow",
   "async-channel",
@@ -740,13 +785,13 @@ index 1124dc36..690a2f2d 100644
 - "gpui-pre",
 - "gpui-pre-http-client",
 - "gpui-pre-scheduler",
-+ "gpui-pre 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-http-client 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-scheduler 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-http-client 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-scheduler 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "gpui-pre-wgpu",
   "js-sys",
   "log",
-@@ -4867,7 +5080,7 @@ dependencies = [
+@@ -4843,7 +5077,7 @@ dependencies = [
   "uuid",
   "wasm-bindgen",
   "wasm-bindgen-futures",
@@ -755,13 +800,13 @@ index 1124dc36..690a2f2d 100644
   "web-sys",
   "web-time",
  ]
-@@ -4875,16 +5088,15 @@ dependencies = [
+@@ -4851,16 +5085,15 @@ dependencies = [
  [[package]]
  name = "gpui-pre-wgpu"
- version = "0.3.9"
+ version = "0.3.10"
 -source = "registry+https://github.com/rust-lang/crates.io-index"
--checksum = "5b1cdb26c1503bf9662ee8fbc5ab0b44b2deeee4b5c12dc67491ba6fb5fc544b"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
+-checksum = "ce693915768aae38bf788f245af75aae78e3e1179245860fc80ce831d0a8f74e"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
  dependencies = [
   "anyhow",
   "bytemuck",
@@ -770,30 +815,30 @@ index 1124dc36..690a2f2d 100644
 - "gpui-pre",
 - "gpui-pre-collections",
 - "gpui-pre-util",
-+ "gpui-pre 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-collections 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-util 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "image",
   "itertools 0.14.0",
   "log",
-@@ -4897,14 +5109,13 @@ dependencies = [
+@@ -4873,14 +5106,13 @@ dependencies = [
   "unicode-segmentation",
   "web-sys",
-  "wgpu 29.0.4",
+  "wgpu",
 - "zed-font-kit",
 + "zed-font-kit 0.14.1-zed (git+https://github.com/zed-industries/font-kit?rev=94b0f28166665e8fd2f53ff6d268a14955c82269)",
  ]
  
  [[package]]
  name = "gpui-pre-windows"
- version = "0.3.9"
+ version = "0.3.10"
 -source = "registry+https://github.com/rust-lang/crates.io-index"
--checksum = "513d4f0fc7d596d3bdef2a73a524ffb83dabc95bf484f2855a698e7f431290a9"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
+-checksum = "80670f987b920fba019917b2e222ecf2b377f2a6d77872010c7d284c235837b3"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
  dependencies = [
   "accesskit",
   "accesskit_windows",
-@@ -4912,10 +5123,10 @@ dependencies = [
+@@ -4888,10 +5120,10 @@ dependencies = [
   "dunce",
   "etagere",
   "futures",
@@ -801,53 +846,94 @@ index 1124dc36..690a2f2d 100644
 - "gpui-pre-collections",
 - "gpui-pre-scheduler",
 - "gpui-pre-util",
-+ "gpui-pre 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-collections 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-scheduler 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
-+ "gpui-pre-util 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-scheduler 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "image",
   "itertools 0.14.0",
   "log",
-@@ -4936,7 +5147,16 @@ version = "0.3.9"
+@@ -4912,7 +5144,16 @@ version = "0.3.10"
  source = "registry+https://github.com/rust-lang/crates.io-index"
- checksum = "f17bfd6bd1f77ba5c58181fa6f82fc7a63015a1c58bef94a76e5acb9f8e42572"
+ checksum = "814cc08c526961c88703806a68ba4cf216a1d988ffbbdc673304f4dd25858952"
  dependencies = [
 - "gpui-pre-ztracing-macro",
-+ "gpui-pre-ztracing-macro 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
++ "gpui-pre-ztracing-macro 0.3.10 (registry+https://github.com/rust-lang/crates.io-index)",
 + "tracing",
 +]
 +
 +[[package]]
 +name = "gpui-pre-ztracing"
-+version = "0.3.9"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
++version = "0.3.10"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
 +dependencies = [
-+ "gpui-pre-ztracing-macro 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre-ztracing-macro 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "tracing",
  ]
  
-@@ -4946,6 +5166,11 @@ version = "0.3.9"
+@@ -4922,6 +5163,11 @@ version = "0.3.10"
  source = "registry+https://github.com/rust-lang/crates.io-index"
- checksum = "4b0d73e1bc02eef886a5947f41b8512708792e9e5d3053d181843311a487f96f"
+ checksum = "e0f9dae92b9bc15baa6e530c90bdd4c689d3710bd4d18c3566deb1d6ae182daf"
  
 +[[package]]
 +name = "gpui-pre-ztracing-macro"
-+version = "0.3.9"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e#ab40fa8bbac4114552547153f1df88fab550289e"
++version = "0.3.10"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
 +
  [[package]]
  name = "gpui-shell"
- version = "0.8.0"
-@@ -4962,7 +5187,7 @@ dependencies = [
+ version = "0.8.1"
+@@ -4938,7 +5184,7 @@ dependencies = [
   "gpui-fast-platform",
   "gpui-fps",
   "gpui-kit",
 - "gpui-pre",
-+ "gpui-pre 0.3.9 (git+https://github.com/ruiyangke/gpui-kit?rev=ab40fa8bbac4114552547153f1df88fab550289e)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
   "gpui-pre-platform",
   "gpui-pre-reqwest",
   "gpui-webview",
-@@ -12005,6 +12230,17 @@ dependencies = [
+@@ -7366,6 +7612,40 @@ dependencies = [
+  "zvariant",
+ ]
+ 
++[[package]]
++name = "oo7"
++version = "0.6.0"
++source = "git+https://github.com/zed-industries/oo7?rev=731c1215edb6905876c6137ab300428c7b8d7c13#731c1215edb6905876c6137ab300428c7b8d7c13"
++dependencies = [
++ "aes 0.8.4",
++ "ashpd",
++ "async-fs",
++ "async-io",
++ "async-lock",
++ "blocking",
++ "cbc 0.1.2",
++ "cipher 0.4.4",
++ "digest 0.10.7",
++ "endi",
++ "futures-lite",
++ "futures-util",
++ "getrandom 0.4.3",
++ "hkdf 0.12.4",
++ "hmac 0.12.1",
++ "md-5 0.10.6",
++ "num",
++ "num-bigint-dig",
++ "pbkdf2 0.12.2",
++ "serde",
++ "serde_bytes",
++ "sha2 0.10.9",
++ "subtle",
++ "zbus",
++ "zbus_macros",
++ "zeroize",
++ "zvariant",
++]
++
+ [[package]]
+ name = "oorandom"
+ version = "11.1.5"
+@@ -11773,6 +12053,17 @@ dependencies = [
   "web-sys",
  ]
  
@@ -865,7 +951,7 @@ index 1124dc36..690a2f2d 100644
  [[package]]
  name = "wayland-backend"
  version = "0.3.17"
-@@ -13457,6 +13693,22 @@ dependencies = [
+@@ -13047,6 +13338,22 @@ dependencies = [
   "encoding_rs",
  ]
  
@@ -888,7 +974,7 @@ index 1124dc36..690a2f2d 100644
  [[package]]
  name = "xim-parser"
  version = "0.2.2"
-@@ -13684,6 +13936,30 @@ dependencies = [
+@@ -13274,6 +13581,30 @@ dependencies = [
   "yeslogic-fontconfig-sys",
  ]
  
@@ -919,7 +1005,7 @@ index 1124dc36..690a2f2d 100644
  [[package]]
  name = "zed-scap"
  version = "0.0.8-zed"
-@@ -13706,6 +13982,27 @@ dependencies = [
+@@ -13296,6 +13627,27 @@ dependencies = [
   "xcb",
  ]
  
@@ -929,7 +1015,7 @@ index 1124dc36..690a2f2d 100644
 +source = "git+https://github.com/zed-industries/scap?rev=4afea48c3b002197176fb19cd0f9b180dd36eaac#4afea48c3b002197176fb19cd0f9b180dd36eaac"
 +dependencies = [
 + "anyhow",
-+ "cocoa 0.25.0",
++ "cocoa",
 + "core-graphics-helmer-fork",
 + "log",
 + "objc",
@@ -947,7 +1033,7 @@ index 1124dc36..690a2f2d 100644
  [[package]]
  name = "zed-xim"
  version = "0.4.0-zed"
-@@ -13716,8 +14013,21 @@ dependencies = [
+@@ -13306,8 +13658,21 @@ dependencies = [
   "hashbrown 0.14.5",
   "log",
   "x11rb",
@@ -972,41 +1058,41 @@ index 1124dc36..690a2f2d 100644
  
  [[package]]
 diff --git a/Cargo.toml b/Cargo.toml
-index d1c15ca7..1250ebbe 100644
+index 1b161e44..78859145 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -66,18 +66,18 @@ story = { path = "crates/story" }
+@@ -65,18 +65,18 @@ story = { path = "crates/story" }
  # onto a newer snapshot that gpui-component did not compile with (#3156). Bump
  # every snapshot crate together with its Cargo.lock entry; `script/check-gpui-pin.ts`
  # fails CI when a pin is not exact.
--gpui = { package = "gpui-pre", version = "=0.3.9" }
--gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
--gpui_web = { package = "gpui-pre-web", version = "=0.3.9" }
-+gpui = { package = "gpui-pre", version = "=0.3.9", git = "https://github.com/ruiyangke/gpui-kit", rev = "ab40fa8bbac4114552547153f1df88fab550289e" }
-+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", git = "https://github.com/ruiyangke/gpui-kit", rev = "ab40fa8bbac4114552547153f1df88fab550289e", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-+gpui_web = { package = "gpui-pre-web", version = "=0.3.9", git = "https://github.com/ruiyangke/gpui-kit", rev = "ab40fa8bbac4114552547153f1df88fab550289e" }
+-gpui = { package = "gpui-pre", version = "=0.3.10" }
+-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+-gpui_web = { package = "gpui-pre-web", version = "=0.3.10" }
++gpui = { package = "gpui-pre", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "5814f2465c8c4a5fcd01687abd3163d6c35860ef" }
++gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "5814f2465c8c4a5fcd01687abd3163d6c35860ef", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
++gpui_web = { package = "gpui-pre-web", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "5814f2465c8c4a5fcd01687abd3163d6c35860ef" }
  # Fast is optional; existing crates select it through their gpui-fast feature.
  # Explicit package fields make Cargo use these dependency keys as Rust crate names;
  # the packages declare the same library names as the pre backend.
- gpui-fast = { package = "gpui-fast", version = "0.1.10", features = ["windows-manifest-provided-by-host"] }
- gpui-fast-platform = { package = "gpui-fast-platform", version = "0.1.10", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
- gpui-fast-web = { package = "gpui-fast-web", version = "0.1.10" }
--gpui_macros = { package = "gpui-pre-macros", version = "=0.3.9" }
--reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.9" }
--sum-tree = { package = "gpui-pre-sum-tree", version = "=0.3.9" }
-+gpui_macros = { package = "gpui-pre-macros", version = "=0.3.9", git = "https://github.com/ruiyangke/gpui-kit", rev = "ab40fa8bbac4114552547153f1df88fab550289e" }
-+reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.9", git = "https://github.com/ruiyangke/gpui-kit", rev = "ab40fa8bbac4114552547153f1df88fab550289e" }
-+sum-tree = { package = "gpui-pre-sum-tree", version = "=0.3.9", git = "https://github.com/ruiyangke/gpui-kit", rev = "ab40fa8bbac4114552547153f1df88fab550289e" }
+ gpui-fast = { package = "gpui-fast", version = "0.1.12", features = ["windows-manifest-provided-by-host"] }
+ gpui-fast-platform = { package = "gpui-fast-platform", version = "0.1.12", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+ gpui-fast-web = { package = "gpui-fast-web", version = "0.1.12" }
+-gpui_macros = { package = "gpui-pre-macros", version = "=0.3.10" }
+-reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.10" }
+-sum-tree = { package = "gpui-pre-sum-tree", version = "=0.3.10" }
++gpui_macros = { package = "gpui-pre-macros", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "5814f2465c8c4a5fcd01687abd3163d6c35860ef" }
++reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "5814f2465c8c4a5fcd01687abd3163d6c35860ef" }
++sum-tree = { package = "gpui-pre-sum-tree", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "5814f2465c8c4a5fcd01687abd3163d6c35860ef" }
  reqwest = { package = "gpui-pre-reqwest", version = "=0.12.15", default-features = false, features = [
      "charset",
      "http2",
 diff --git a/crates/base/src/button.rs b/crates/base/src/button.rs
-index 972cb3d1..e8836022 100644
+index 16121f80..fa47c8fe 100644
 --- a/crates/base/src/button.rs
 +++ b/crates/base/src/button.rs
-@@ -360,11 +360,21 @@ mod tests {
-         for key in ["enter", "space"] {
-             let keystroke = Keystroke::parse(key).unwrap();
+@@ -370,11 +370,21 @@ mod tests {
+             let keystroke =
+                 cx.update(|_, cx| Keystroke::parse_with_os(key, cx.platform_info().os).unwrap());
              cx.simulate_event(KeyDownEvent {
 +                #[cfg(not(feature = "gpui-fast"))]
 +                physical_key: None,
@@ -1027,6 +1113,29 @@ index 972cb3d1..e8836022 100644
          }
  
          assert_eq!(button_clicks.get(), 2);
+@@ -433,11 +443,21 @@ mod tests {
+         let keystroke =
+             cx.update(|_, cx| Keystroke::parse_with_os(key, cx.platform_info().os).unwrap());
+         cx.simulate_event(KeyDownEvent {
++            #[cfg(not(feature = "gpui-fast"))]
++            physical_key: None,
++            #[cfg(not(feature = "gpui-fast"))]
++            key_metadata: None,
+             keystroke: keystroke.clone(),
+             is_held: false,
+             prefer_character_input: false,
+         });
+-        cx.simulate_event(KeyUpEvent { keystroke });
++        cx.simulate_event(KeyUpEvent {
++            #[cfg(not(feature = "gpui-fast"))]
++            physical_key: None,
++            #[cfg(not(feature = "gpui-fast"))]
++            key_metadata: None,
++            keystroke,
++        });
+         cx.update(|window, cx| window.draw(cx).clear(cx));
+     }
+ 
 diff --git a/crates/base/src/checkbox.rs b/crates/base/src/checkbox.rs
 index 6e29b619..90eef06f 100644
 --- a/crates/base/src/checkbox.rs
@@ -1082,12 +1191,12 @@ index eb8867fa..73ba641f 100644
          assert_eq!(attempts.get(), 2);
          assert!(!handle.is_open(), "Space uses the same cancel decision");
 diff --git a/crates/base/src/link.rs b/crates/base/src/link.rs
-index 56aa4de8..1849a2fe 100644
+index 314e5bb0..bbd1e449 100644
 --- a/crates/base/src/link.rs
 +++ b/crates/base/src/link.rs
-@@ -289,11 +289,21 @@ mod tests {
-     fn activate_key(cx: &mut VisualTestContext, key: &str) {
-         let keystroke = Keystroke::parse(key).unwrap();
+@@ -290,11 +290,21 @@ mod tests {
+         let keystroke =
+             cx.update(|_, cx| Keystroke::parse_with_os(key, cx.platform_info().os).unwrap());
          cx.simulate_event(KeyDownEvent {
 +            #[cfg(not(feature = "gpui-fast"))]
 +            physical_key: None,
@@ -1136,12 +1245,12 @@ index dc9424db..141a868e 100644
          assert_eq!(changes.get(), 2);
          assert_eq!(keyboard_changes.get(), 2);
 diff --git a/crates/base/src/switch.rs b/crates/base/src/switch.rs
-index cdd881db..e660fb55 100644
+index e798662f..aaa119f8 100644
 --- a/crates/base/src/switch.rs
 +++ b/crates/base/src/switch.rs
-@@ -584,11 +584,21 @@ mod tests {
-     fn activate_key(cx: &mut VisualTestContext, key: &str) {
-         let keystroke = Keystroke::parse(key).unwrap();
+@@ -585,11 +585,21 @@ mod tests {
+         let keystroke =
+             cx.update(|_, cx| Keystroke::parse_with_os(key, cx.platform_info().os).unwrap());
          cx.simulate_event(KeyDownEvent {
 +            #[cfg(not(feature = "gpui-fast"))]
 +            physical_key: None,
@@ -1190,7 +1299,7 @@ index 4aac3c18..2f7b9081 100644
          assert_eq!(changes.borrow().as_slice(), &[true, true]);
          assert_eq!(keyboard_changes.get(), 2);
 diff --git a/crates/component/src/attachment.rs b/crates/component/src/attachment.rs
-index 0400bd71..94c46832 100644
+index 490ad5bf..d41c3433 100644
 --- a/crates/component/src/attachment.rs
 +++ b/crates/component/src/attachment.rs
 @@ -1814,11 +1814,21 @@ mod tests {
@@ -1217,10 +1326,10 @@ index 0400bd71..94c46832 100644
          }
  
 diff --git a/crates/component/src/button/button.rs b/crates/component/src/button/button.rs
-index d83f046f..240c8b8f 100644
+index 8443257d..c524c9ec 100644
 --- a/crates/component/src/button/button.rs
 +++ b/crates/component/src/button/button.rs
-@@ -1504,11 +1504,21 @@ mod tests {
+@@ -1518,11 +1518,21 @@ mod tests {
          for key in ["enter", "space"] {
              let keystroke = Keystroke::parse(key).unwrap();
              cx.simulate_event(KeyDownEvent {
@@ -1243,13 +1352,36 @@ index d83f046f..240c8b8f 100644
          }
  
          assert_eq!(clicks.get(), 3);
+@@ -1580,11 +1590,21 @@ mod tests {
+ 
+         let keystroke = Keystroke::parse("enter").unwrap();
+         cx.simulate_event(KeyDownEvent {
++            #[cfg(not(feature = "gpui-fast"))]
++            physical_key: None,
++            #[cfg(not(feature = "gpui-fast"))]
++            key_metadata: None,
+             keystroke: keystroke.clone(),
+             is_held: false,
+             prefer_character_input: false,
+         });
+-        cx.simulate_event(KeyUpEvent { keystroke });
++        cx.simulate_event(KeyUpEvent {
++            #[cfg(not(feature = "gpui-fast"))]
++            physical_key: None,
++            #[cfg(not(feature = "gpui-fast"))]
++            key_metadata: None,
++            keystroke,
++        });
+         assert_eq!(clicks.get(), 1);
+     }
+ 
 diff --git a/crates/component/src/button/button_group.rs b/crates/component/src/button/button_group.rs
-index 7075d1d0..0bb5eb21 100644
+index b2266347..e8550175 100644
 --- a/crates/component/src/button/button_group.rs
 +++ b/crates/component/src/button/button_group.rs
-@@ -331,11 +331,21 @@ mod tests {
-     fn activate_key(cx: &mut VisualTestContext, key: &str) {
-         let keystroke = Keystroke::parse(key).unwrap();
+@@ -332,11 +332,21 @@ mod tests {
+         let keystroke =
+             cx.update(|_, cx| Keystroke::parse_with_os(key, cx.platform_info().os).unwrap());
          cx.simulate_event(KeyDownEvent {
 +            #[cfg(not(feature = "gpui-fast"))]
 +            physical_key: None,
@@ -1271,12 +1403,12 @@ index 7075d1d0..0bb5eb21 100644
  
      fn click_first(cx: &mut VisualTestContext) {
 diff --git a/crates/component/src/button/toggle.rs b/crates/component/src/button/toggle.rs
-index a54d52af..fd98c426 100644
+index 523a10fd..004300e6 100644
 --- a/crates/component/src/button/toggle.rs
 +++ b/crates/component/src/button/toggle.rs
-@@ -469,11 +469,21 @@ mod tests {
-     fn activate_key(cx: &mut VisualTestContext, key: &str) {
-         let keystroke = Keystroke::parse(key).unwrap();
+@@ -470,11 +470,21 @@ mod tests {
+         let keystroke =
+             cx.update(|_, cx| Keystroke::parse_with_os(key, cx.platform_info().os).unwrap());
          cx.simulate_event(KeyDownEvent {
 +            #[cfg(not(feature = "gpui-fast"))]
 +            physical_key: None,
@@ -1325,12 +1457,12 @@ index ea17a758..3be763fe 100644
          assert!(!root_focused(cx));
          assert!(cx.update(|window, cx| window.focused(cx).is_some()));
 diff --git a/crates/component/src/checkbox.rs b/crates/component/src/checkbox.rs
-index 5ef72f15..91ccf3c7 100644
+index 8900eb65..900aedc8 100644
 --- a/crates/component/src/checkbox.rs
 +++ b/crates/component/src/checkbox.rs
-@@ -442,11 +442,21 @@ mod tests {
-     fn activate_key(cx: &mut VisualTestContext, key: &str) {
-         let keystroke = Keystroke::parse(key).unwrap();
+@@ -443,11 +443,21 @@ mod tests {
+         let keystroke =
+             cx.update(|_, cx| Keystroke::parse_with_os(key, cx.platform_info().os).unwrap());
          cx.simulate_event(KeyDownEvent {
 +            #[cfg(not(feature = "gpui-fast"))]
 +            physical_key: None,
@@ -1352,10 +1484,10 @@ index 5ef72f15..91ccf3c7 100644
  
      #[gpui::test]
 diff --git a/crates/component/src/questionnaire/components.rs b/crates/component/src/questionnaire/components.rs
-index 2f1d64c5..14437dd8 100644
+index f7ba4ac2..a60f5db8 100644
 --- a/crates/component/src/questionnaire/components.rs
 +++ b/crates/component/src/questionnaire/components.rs
-@@ -1574,6 +1574,10 @@ mod tests {
+@@ -1576,6 +1576,10 @@ mod tests {
              keystroke = keystroke.with_simulated_ime();
          }
          cx.simulate_event(KeyDownEvent {
@@ -1366,9 +1498,9 @@ index 2f1d64c5..14437dd8 100644
              keystroke,
              is_held,
              prefer_character_input: false,
-@@ -2091,11 +2095,21 @@ mod tests {
-     fn press(cx: &mut VisualTestContext, key: &str) {
-         let keystroke = Keystroke::parse(key).unwrap();
+@@ -2094,11 +2098,21 @@ mod tests {
+         let os = cx.update(|_, cx| cx.platform_info().os);
+         let keystroke = Keystroke::parse_with_os(key, os).unwrap();
          cx.simulate_event(KeyDownEvent {
 +            #[cfg(not(feature = "gpui-fast"))]
 +            physical_key: None,
@@ -1390,12 +1522,12 @@ index 2f1d64c5..14437dd8 100644
  
      fn focus_choice(
 diff --git a/crates/component/src/switch.rs b/crates/component/src/switch.rs
-index 445b8a1c..db4b568e 100644
+index 1dd1c484..e1ea0b2b 100644
 --- a/crates/component/src/switch.rs
 +++ b/crates/component/src/switch.rs
-@@ -394,11 +394,21 @@ mod tests {
-     fn activate_key(cx: &mut VisualTestContext, key: &str) {
-         let keystroke = Keystroke::parse(key).unwrap();
+@@ -395,11 +395,21 @@ mod tests {
+         let keystroke =
+             cx.update(|_, cx| Keystroke::parse_with_os(key, cx.platform_info().os).unwrap());
          cx.simulate_event(KeyDownEvent {
 +            #[cfg(not(feature = "gpui-fast"))]
 +            physical_key: None,
@@ -1467,7 +1599,7 @@ index 641b4de5..c52561c8 100644
          assert_eq!(owner.read(cx).requests, [true, false]);
          assert!(!owner.read(cx).checked);
 diff --git a/crates/kit/src/test.rs b/crates/kit/src/test.rs
-index 5c554aec..211643ee 100644
+index 2e5cb0e9..7ae58fba 100644
 --- a/crates/kit/src/test.rs
 +++ b/crates/kit/src/test.rs
 @@ -535,6 +535,10 @@ fn press_key(window: &mut Window, key: Keystroke, cx: &mut App) {
@@ -1501,10 +1633,10 @@ index 5c554aec..211643ee 100644
  
  fn input_text(window: &mut Window, text: &str, scope: Option<&[ElementId]>, cx: &mut App) {
 diff --git a/crates/kit/src/test/events.rs b/crates/kit/src/test/events.rs
-index 293a0064..39144983 100644
+index 211a187d..4ac138a7 100644
 --- a/crates/kit/src/test/events.rs
 +++ b/crates/kit/src/test/events.rs
-@@ -99,6 +99,10 @@ impl TestEventExt for Window {
+@@ -100,6 +100,10 @@ impl TestEventExt for Window {
          keystroke.modifiers |= self.modifiers();
          self.dispatch_event(
              KeyDownEvent {
@@ -1515,8 +1647,8 @@ index 293a0064..39144983 100644
                  keystroke,
                  is_held,
                  prefer_character_input: false,
-@@ -112,7 +116,17 @@ impl TestEventExt for Window {
-         let mut keystroke = parse_key(key);
+@@ -113,7 +117,17 @@ impl TestEventExt for Window {
+         let mut keystroke = parse_key(key, cx);
          self.render_frame(cx);
          keystroke.modifiers |= self.modifiers();
 -        self.dispatch_event(KeyUpEvent { keystroke }.to_platform_input(), cx);
@@ -1535,7 +1667,7 @@ index 293a0064..39144983 100644
      }
  }
 diff --git a/crates/kit/tests/integration/menu.rs b/crates/kit/tests/integration/menu.rs
-index 26240222..7af0d3ad 100644
+index 3bf88507..9605ccaf 100644
 --- a/crates/kit/tests/integration/menu.rs
 +++ b/crates/kit/tests/integration/menu.rs
 @@ -281,6 +281,10 @@ fn press_context_menu_key(handle: AnyWindowHandle, key: &str, cx: &mut TestAppCo
@@ -1568,18 +1700,3 @@ index 26240222..7af0d3ad 100644
      })
      .unwrap();
      cx.run_until_parked();
-diff --git a/crates/shell/src/tests/render.rs b/crates/shell/src/tests/render.rs
-index c879157f..47f9be17 100644
---- a/crates/shell/src/tests/render.rs
-+++ b/crates/shell/src/tests/render.rs
-@@ -7350,6 +7350,10 @@ export default class Keys extends View {
-     // the release is posted directly. Without it `on_key_up` would be asserted
-     // by a test that never delivered one.
-     context.simulate_event(gpui::KeyUpEvent {
-+        #[cfg(not(feature = "gpui-fast"))]
-+        physical_key: None,
-+        #[cfg(not(feature = "gpui-fast"))]
-+        key_metadata: None,
-         keystroke: gpui::Keystroke::parse("escape").expect("keystroke"),
-     });
-     context.run_until_parked();

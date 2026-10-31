@@ -1,7 +1,7 @@
-0001-gpui-Pin-the-terminal-keyboard-snapshot.patch
-0002-dialog-Give-each-dialog-an-identity-and-center-it-on.patch
+0001-gpui-Pin-Newport-s-GPUI-snapshot.patch
+0002-dialog-Give-each-dialog-an-identity-and-own-its-focu.patch
 0003-menu-Return-focus-to-the-trigger-before-running-an-i.patch
 0004-select-combobox-Track-choices-by-value.patch
 0005-controls-Add-explicit-sizing-hooks.patch
-0006-text-Copy-selections-exactly-and-lay-out-tabs-at-tab.patch
+0006-text-Copy-selections-exactly-and-keep-fractional-lin.patch
 0007-input-Keep-the-first-character-typed-into-the-search.patch

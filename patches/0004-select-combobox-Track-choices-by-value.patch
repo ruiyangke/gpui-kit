@@ -403,7 +403,7 @@ index 709a49d2..0a3cefb0 100644
      }
  
 diff --git a/crates/component/src/list/list.rs b/crates/component/src/list/list.rs
-index 157ea268..b8611358 100644
+index a7242cd6..b42c9754 100644
 --- a/crates/component/src/list/list.rs
 +++ b/crates/component/src/list/list.rs
 @@ -21,6 +21,7 @@ use gpui::{
@@ -414,7 +414,7 @@ index 157ea268..b8611358 100644
  use rust_i18n::t;
  
  pub(crate) fn init(cx: &mut App) {
-@@ -493,6 +494,7 @@ where
+@@ -501,6 +502,7 @@ where
  
          div()
              .id(id)

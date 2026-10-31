@@ -1,0 +1,169 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ruiyangke <me@ry.ke>
+Date: Tue, 20 Oct 2026 15:04:50 -0700
+Subject: [PATCH] text: Copy selections exactly and keep fractional line
+ heights
+
+- Copying a window text selection no longer trims it. Indentation, a lone
+  tab and selected spaces are text. Copying only whitespace used to write
+  nothing, leaving the previous clipboard contents in place.
+- SelectableText::paint_selection is public, so virtualized plain-text
+  views can paint selections with the same wrapped-line geometry.
+- Inputs keep fractional line heights. Layout, hit testing, scrolling and
+  painting share one value instead of rounding every row.
+
+Remove when upstream copies selections verbatim and keeps fractional rows.
+---
+ crates/base/src/input/base/element.rs | 25 ++++++++++++++++++-------
+ crates/base/src/input/base/state.rs   |  2 +-
+ crates/base/src/root.rs               |  5 ++---
+ crates/base/src/selectable_text.rs    |  7 ++++++-
+ crates/base/src/text_selection.rs     |  2 +-
+ crates/component/src/input/editor.rs  |  3 ++-
+ 6 files changed, 30 insertions(+), 14 deletions(-)
+
+diff --git a/crates/base/src/input/base/element.rs b/crates/base/src/input/base/element.rs
+index 20b2b6d3..11700a51 100644
+--- a/crates/base/src/input/base/element.rs
++++ b/crates/base/src/input/base/element.rs
+@@ -47,6 +47,15 @@ fn diagnostic_highlight_style(
+     }
+ }
+ 
++// Preserve fractional CSS-like line spacing. Layout, hit testing, scrolling and
++// paint must share this value rather than rounding every row to a logical pixel.
++pub(super) fn text_line_height(window: &Window) -> Pixels {
++    let style = window.text_style();
++    style
++        .line_height
++        .to_pixels(style.font_size, window.rem_size())
++}
++
+ const BOTTOM_MARGIN_ROWS: usize = 3;
+ pub(super) const RIGHT_MARGIN: Pixels = px(10.);
+ pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(6.);
+@@ -504,7 +513,7 @@ impl<M: InputModeKind> TextElement<M> {
+                     && hitbox.should_handle_scroll(window)
+                     && state
+                         .read(cx)
+-                        .takes_scroll(event.delta.pixel_delta(window.line_height()))
++                        .takes_scroll(event.delta.pixel_delta(text_line_height(window)))
+                 {
+                     crate::scroll_bounce::claim_scroll(hitbox, cx);
+                 }
+@@ -2651,7 +2660,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
+         cx: &mut App,
+     ) -> (LayoutId, Self::RequestLayoutState) {
+         let state = self.state.read(cx);
+-        let line_height = window.line_height();
++        let line_height = text_line_height(window);
+ 
+         let mut style = Style::default();
+         style.size.width = relative(1.).into();
+@@ -2760,7 +2769,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
+             });
+         }
+ 
+-        let line_height = window.line_height();
++        let line_height = text_line_height(window);
+         let token_elements = self.measure_tokens(
+             (bounds.size.width - line_number_width - RIGHT_MARGIN).max(px(1.)),
+             line_height,
+@@ -3245,7 +3254,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
+         );
+ 
+         // Paint multi line text
+-        let line_height = window.line_height();
++        let line_height = text_line_height(window);
+         let origin = bounds.origin;
+ 
+         let invisible_top_padding = prepaint.last_layout.visible_top;
+@@ -4649,9 +4658,11 @@ mod tests {
+                     corners.top_right.x,
+                     first.wrap_indent + first.wrapped_lines[index + 1].width
+                 );
+-                assert_eq!(
+-                    corners.bottom_left.y - corners.top_left.y,
+-                    layout.line_height
++                // Fractional line heights lose a few ulps when subtracting
++                // absolute row positions; keep the geometry within 0.001 px.
++                assert!(
++                    ((corners.bottom_left.y - corners.top_left.y) - layout.line_height).abs()
++                        < px(0.001)
+                 );
+             }
+             let blank_offset = text.find("\n\n").unwrap() + 1;
+diff --git a/crates/base/src/input/base/state.rs b/crates/base/src/input/base/state.rs
+index 62831b2a..3946f0b5 100644
+--- a/crates/base/src/input/base/state.rs
++++ b/crates/base/src/input/base/state.rs
+@@ -2849,7 +2849,7 @@ impl<M: InputModeKind> InputBaseState<M> {
+             .last_layout
+             .as_ref()
+             .map(|layout| layout.line_height)
+-            .unwrap_or(window.line_height());
++            .unwrap_or_else(|| super::element::text_line_height(window));
+         let delta = event.delta.pixel_delta(line_height);
+ 
+         let old_offset = self.scroll_handle.offset();
+diff --git a/crates/base/src/root.rs b/crates/base/src/root.rs
+index 5f678dd3..67a7c05b 100644
+--- a/crates/base/src/root.rs
++++ b/crates/base/src/root.rs
+@@ -228,9 +228,8 @@ impl Root {
+     }
+ 
+     fn on_action_copy(&mut self, _: &Copy, window: &mut Window, cx: &mut Context<Self>) {
+-        let text = crate::TextSelection::selected_text(window, cx)
+-            .trim()
+-            .to_string();
++        // Copy the selection exactly; indentation and selected spaces are text.
++        let text = crate::TextSelection::selected_text(window, cx);
+         if text.is_empty() {
+             cx.propagate();
+             return;
+diff --git a/crates/base/src/selectable_text.rs b/crates/base/src/selectable_text.rs
+index f53b6116..3654423c 100644
+--- a/crates/base/src/selectable_text.rs
++++ b/crates/base/src/selectable_text.rs
+@@ -72,7 +72,12 @@ impl SelectableText {
+         self
+     }
+ 
+-    fn paint_selection(
++    /// Paints a UTF-8 byte selection using the same wrapped-line geometry as
++    /// this element. Virtualized plain-text adapters can retain document
++    /// endpoints through [`TextSelectionHandle`] and reuse this renderer for
++    /// the visible portion of their selection. The range must be valid for
++    /// the text used to shape `layout`.
++    pub fn paint_selection(
+         layout: &gpui::TextLayout,
+         range: Range<usize>,
+         color: Hsla,
+diff --git a/crates/base/src/text_selection.rs b/crates/base/src/text_selection.rs
+index e1696117..c2cb8cbf 100644
+--- a/crates/base/src/text_selection.rs
++++ b/crates/base/src/text_selection.rs
+@@ -681,7 +681,7 @@ fn resolve_copy_items(mut items: Vec<CopyItem>, cx: &mut App) -> String {
+                 .map(|callback| callback(cx))
+                 .unwrap_or(item.fallback)
+         })
+-        .filter(|text| !text.trim().is_empty())
++        .filter(|text| !text.is_empty())
+         .collect::<Vec<_>>()
+         .join("\n")
+ }
+diff --git a/crates/component/src/input/editor.rs b/crates/component/src/input/editor.rs
+index f69d6dee..1fd0c5aa 100644
+--- a/crates/component/src/input/editor.rs
++++ b/crates/component/src/input/editor.rs
+@@ -225,7 +225,8 @@ mod tests {
+     #[gpui::test]
+     fn the_rows_follow_the_font_size(cx: &mut TestAppContext) {
+         // With nothing set, the theme's monospace size, not the ambient one.
+-        assert_eq!(line_height(cx, None), px(20.));
++        // Rows keep the fractional line height rather than rounding to 20px.
++        assert_eq!(line_height(cx, None), px(19.5));
+         // A text style set on the editor refines over that, rows and all.
+         assert_eq!(line_height(cx, Some(px(24.))), px(36.));
+         assert_eq!(line_height(cx, Some(px(40.))), px(60.));

@@ -21,16 +21,16 @@ Remove each hook when upstream offers an equivalent.
 ---
  crates/component/src/button/button.rs  |  6 +-
  crates/component/src/checkbox.rs       | 26 ++++++---
- crates/component/src/input/input.rs    | 42 ++++++++-----
+ crates/component/src/input/input.rs    | 38 +++++++-----
  crates/component/src/input/textarea.rs | 16 ++++-
  crates/component/src/pagination.rs     | 34 ++++++++++-
  crates/component/src/switch.rs         | 81 ++++++++++++++++++++++++--
  crates/component/src/tab/tab.rs        | 19 ++++++
  crates/component/src/tab/tab_bar.rs    |  9 +++
- 8 files changed, 196 insertions(+), 37 deletions(-)
+ 8 files changed, 194 insertions(+), 35 deletions(-)
 
 diff --git a/crates/component/src/button/button.rs b/crates/component/src/button/button.rs
-index 3685c061..04acd8aa 100644
+index c524c9ec..d79e9ded 100644
 --- a/crates/component/src/button/button.rs
 +++ b/crates/component/src/button/button.rs
 @@ -302,9 +302,9 @@ impl Button {
@@ -47,7 +47,7 @@ index 3685c061..04acd8aa 100644
          self.icon_size = Some(icon_size);
          self
 diff --git a/crates/component/src/checkbox.rs b/crates/component/src/checkbox.rs
-index 91ccf3c7..e0e6b740 100644
+index 900aedc8..a5fe70f1 100644
 --- a/crates/component/src/checkbox.rs
 +++ b/crates/component/src/checkbox.rs
 @@ -8,7 +8,7 @@ use crate::{StyleSized as _, StyledExt as _, ThemeStyled as _};
@@ -105,23 +105,19 @@ index 91ccf3c7..e0e6b740 100644
                      .border_1()
                      .rounded(radius)
 diff --git a/crates/component/src/input/input.rs b/crates/component/src/input/input.rs
-index 3d014b1d..86c28ad8 100644
+index 5d563a84..6a0fb307 100644
 --- a/crates/component/src/input/input.rs
 +++ b/crates/component/src/input/input.rs
-@@ -3,9 +3,9 @@ use std::rc::Rc;
+@@ -3,7 +3,7 @@ use std::rc::Rc;
  use gpui::prelude::FluentBuilder as _;
  use gpui::{
-     AccessibleAction, AnyElement, App, DefiniteLength, Edges, ElementId, Entity, Hsla,
--    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Rems, RenderOnce, Role,
--    SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, TextAlign, TouchPhase,
--    Window, div, px, relative,
-+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Pixels, Rems,
-+    RenderOnce, Role, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled,
-+    TextAlign, TouchPhase, Window, div, px, relative,
+     AnyElement, App, DefiniteLength, Edges, ElementId, Entity, Hsla, InteractiveElement as _,
+-    IntoElement, MouseButton, ParentElement as _, Rems, RenderOnce, Role, SharedString,
++    IntoElement, MouseButton, ParentElement as _, Pixels, Rems, RenderOnce, Role, SharedString,
+     StyleRefinement, Styled, TextAlign, TouchPhase, Window, div, px, relative,
  };
  
- use crate::button::{Button, ButtonRounded, ButtonVariants as _};
-@@ -119,6 +119,7 @@ pub struct Input {
+@@ -117,6 +117,7 @@ pub struct Input {
      prefix: Option<AnyElement>,
      suffix: Option<AnyElement>,
      height: Option<DefiniteLength>,
@@ -129,7 +125,7 @@ index 3d014b1d..86c28ad8 100644
      appearance: bool,
      cleanable: bool,
      mask_toggle: bool,
-@@ -209,6 +210,12 @@ impl Input {
+@@ -207,6 +208,12 @@ impl Input {
          self
      }
  
@@ -142,7 +138,7 @@ index 3d014b1d..86c28ad8 100644
      /// Create a new [`Input`] element bind to the [`InputState`].
      pub fn new(state: &Entity<InputState>) -> Self {
          Self::with_state(state.clone().into())
-@@ -227,6 +234,7 @@ impl Input {
+@@ -225,6 +232,7 @@ impl Input {
              id: None,
              state,
              size: Size::default(),
@@ -150,7 +146,7 @@ index 3d014b1d..86c28ad8 100644
              style: StyleRefinement::default(),
              prefix: None,
              suffix: None,
-@@ -594,20 +602,22 @@ impl RenderOnce for Input {
+@@ -571,20 +579,22 @@ impl RenderOnce for Input {
              cx,
          );
          state.set_editor_paddings(
@@ -329,7 +325,7 @@ index de7c8187..b875da67 100644
                      .disabled(self.disabled)
                      .icon(IconName::Ellipsis)
 diff --git a/crates/component/src/switch.rs b/crates/component/src/switch.rs
-index db4b568e..ef3eeeb5 100644
+index e1ea0b2b..ff6b86e1 100644
 --- a/crates/component/src/switch.rs
 +++ b/crates/component/src/switch.rs
 @@ -23,6 +23,8 @@ pub struct Switch {
@@ -436,7 +432,7 @@ index db4b568e..ef3eeeb5 100644
                      )
                  }),
          )
-@@ -604,4 +639,38 @@ mod tests {
+@@ -605,4 +640,38 @@ mod tests {
              .expect("the Switch label must participate in prepaint");
          assert_eq!(bar.origin.y, label.origin.y);
      }
@@ -541,7 +537,7 @@ index 8891229e..c8dc4879 100644
              .when(folder, |this| {
                  this.px(metrics.padding_x).pb(metrics.top_padding)
 diff --git a/crates/component/src/tab/tab_bar.rs b/crates/component/src/tab/tab_bar.rs
-index 62839712..f54663f5 100644
+index cfa9c436..163f1454 100644
 --- a/crates/component/src/tab/tab_bar.rs
 +++ b/crates/component/src/tab/tab_bar.rs
 @@ -58,6 +58,7 @@ pub struct TabBar {
