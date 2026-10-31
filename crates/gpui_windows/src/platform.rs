@@ -463,7 +463,6 @@ impl WindowsPlatform {
                             &mut directx_device,
                             platform_window.as_raw(),
                             validation_number,
-                            &all_windows,
                             &text_system,
                         ) {
                             panic!("Device lost: {err}");
@@ -1197,7 +1196,8 @@ impl WindowsPlatformInner {
             | WM_GPUI_DOCK_MENU_ACTION
             | WM_GPUI_KEYBOARD_LAYOUT_CHANGED
             | WM_GPUI_DISPLAYS_CHANGED
-            | WM_GPUI_GPU_DEVICE_LOST => self.handle_gpui_events(msg, wparam, lparam),
+            | WM_GPUI_GPU_DEVICE_LOST
+            | WM_GPUI_FORCE_UPDATE_WINDOW => self.handle_gpui_events(msg, wparam, lparam),
             WM_POWERBROADCAST => self.handle_power_broadcast(wparam),
             WM_DISPLAYCHANGE => self.handle_display_change(handle),
             WM_QUERYENDSESSION => Some(1),
@@ -1226,6 +1226,10 @@ impl WindowsPlatformInner {
             WM_GPUI_KEYBOARD_LAYOUT_CHANGED => self.handle_keyboard_layout_change(),
             WM_GPUI_DISPLAYS_CHANGED => self.handle_displays_changed(),
             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
+            WM_GPUI_FORCE_UPDATE_WINDOW => {
+                self.send_to_windows(WM_GPUI_FORCE_UPDATE_WINDOW, None);
+                Some(0)
+            }
             _ => unreachable!(),
         }
     }
@@ -1396,13 +1400,38 @@ impl WindowsPlatformInner {
     fn handle_device_lost(&self, lparam: LPARAM) -> Option<isize> {
         let directx_devices = lparam.0 as *const DirectXDevices;
         let directx_devices = unsafe { &*directx_devices };
-        let mut current = self.state.directx_devices.borrow_mut();
-        // The platform may have switched to headless while the device was being recovered.
-        if current.is_some() {
-            *current = Some(directx_devices.clone());
+        {
+            let mut current = self.state.directx_devices.borrow_mut();
+            // The platform may have switched to headless while the device was being recovered.
+            if current.is_some() {
+                *current = Some(directx_devices.clone());
+            }
         }
-
+        self.send_to_windows(WM_GPUI_GPU_DEVICE_LOST, Some(lparam));
         Some(0)
+    }
+
+    /// Sends a GPUI message to every window. Windows are added and removed on
+    /// this thread, so each one is still alive when it gets the message.
+    fn send_to_windows(&self, message: u32, lparam: Option<LPARAM>) {
+        let Some(all_windows) = self.raw_window_handles.upgrade() else {
+            return;
+        };
+        let windows: SmallVec<[HWND; 4]> = all_windows
+            .read()
+            .iter()
+            .map(TrackedWindow::as_raw)
+            .collect();
+        for window in windows {
+            unsafe {
+                SendMessageW(
+                    window,
+                    message,
+                    Some(WPARAM(self.validation_number)),
+                    lparam,
+                );
+            }
+        }
     }
 }
 
@@ -1715,7 +1744,6 @@ fn handle_gpu_device_lost(
     directx_devices: &mut DirectXDevices,
     platform_window: HWND,
     validation_number: usize,
-    all_windows: &std::sync::Weak<RwLock<SmallVec<[TrackedWindow; 4]>>>,
     text_system: &std::sync::Weak<DirectWriteTextSystem>,
 ) -> Result<()> {
     // Here we wait a bit to ensure the system has time to recover from the device lost state.
@@ -1727,6 +1755,12 @@ fn handle_gpu_device_lost(
     })?;
     log::info!("DirectX devices successfully recreated.");
 
+    if let Some(text_system) = text_system.upgrade() {
+        text_system.handle_gpu_lost(&directx_devices)?;
+    }
+    // The platform window passes both messages on to every window, on the
+    // thread that adds and removes them, so none is sent to a window that is
+    // already gone.
     let lparam = LPARAM(directx_devices as *const _ as _);
     unsafe {
         SendMessageW(
@@ -1736,32 +1770,14 @@ fn handle_gpu_device_lost(
             Some(lparam),
         );
     }
-
-    if let Some(text_system) = text_system.upgrade() {
-        text_system.handle_gpu_lost(&directx_devices)?;
-    }
-    if let Some(all_windows) = all_windows.upgrade() {
-        for window in all_windows.read().iter() {
-            unsafe {
-                SendMessageW(
-                    window.as_raw(),
-                    WM_GPUI_GPU_DEVICE_LOST,
-                    Some(WPARAM(validation_number)),
-                    Some(lparam),
-                );
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        for window in all_windows.read().iter() {
-            unsafe {
-                SendMessageW(
-                    window.as_raw(),
-                    WM_GPUI_FORCE_UPDATE_WINDOW,
-                    Some(WPARAM(validation_number)),
-                    None,
-                );
-            }
-        }
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    unsafe {
+        SendMessageW(
+            platform_window,
+            WM_GPUI_FORCE_UPDATE_WINDOW,
+            Some(WPARAM(validation_number)),
+            None,
+        );
     }
     Ok(())
 }

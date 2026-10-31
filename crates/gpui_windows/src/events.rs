@@ -337,14 +337,15 @@ impl WindowsWindowInner {
         if let Some(callback) = callback {
             callback();
         }
+        // Sent, not posted: the window leaves the vsync thread's list while the
+        // handle is still valid, before `DestroyWindow` returns.
         unsafe {
-            PostMessageW(
-                Some(self.platform_window_handle),
+            SendMessageW(
+                self.platform_window_handle,
                 WM_GPUI_CLOSE_ONE_WINDOW,
-                WPARAM(self.validation_number),
-                LPARAM(handle.0 as isize),
-            )
-            .log_err();
+                Some(WPARAM(self.validation_number)),
+                Some(LPARAM(handle.0 as isize)),
+            );
         }
         Some(0)
     }
