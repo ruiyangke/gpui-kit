@@ -136,11 +136,21 @@ fn controlled_change_callbacks_preserve_activation_and_replace_aliases(cx: &mut 
                 for key in ["enter", "space"] {
                     let keystroke = Keystroke::parse(key).unwrap();
                     visual.simulate_event(KeyDownEvent {
+                        #[cfg(not(feature = "gpui-fast"))]
+                        physical_key: None,
+                        #[cfg(not(feature = "gpui-fast"))]
+                        key_metadata: None,
                         keystroke: keystroke.clone(),
                         is_held: false,
                         prefer_character_input: false,
                     });
-                    visual.simulate_event(KeyUpEvent { keystroke });
+                    visual.simulate_event(KeyUpEvent {
+                        #[cfg(not(feature = "gpui-fast"))]
+                        physical_key: None,
+                        #[cfg(not(feature = "gpui-fast"))]
+                        key_metadata: None,
+                        keystroke,
+                    });
                 }
                 let expected = match control {
                     Control::RadioGroup => "0",
@@ -195,11 +205,21 @@ fn owner_applies_requested_value_before_the_next_activation(cx: &mut TestAppCont
     });
     let keystroke = Keystroke::parse("space").unwrap();
     visual.simulate_event(KeyDownEvent {
+        #[cfg(not(feature = "gpui-fast"))]
+        physical_key: None,
+        #[cfg(not(feature = "gpui-fast"))]
+        key_metadata: None,
         keystroke: keystroke.clone(),
         is_held: false,
         prefer_character_input: false,
     });
-    visual.simulate_event(KeyUpEvent { keystroke });
+    visual.simulate_event(KeyUpEvent {
+        #[cfg(not(feature = "gpui-fast"))]
+        physical_key: None,
+        #[cfg(not(feature = "gpui-fast"))]
+        key_metadata: None,
+        keystroke,
+    });
     visual.update(|_, cx| {
         assert_eq!(owner.read(cx).requests, [true, false]);
         assert!(!owner.read(cx).checked);

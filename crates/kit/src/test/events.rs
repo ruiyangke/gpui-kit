@@ -100,6 +100,10 @@ impl TestEventExt for Window {
         keystroke.modifiers |= self.modifiers();
         self.dispatch_event(
             KeyDownEvent {
+                #[cfg(not(feature = "gpui-fast"))]
+                physical_key: None,
+                #[cfg(not(feature = "gpui-fast"))]
+                key_metadata: None,
                 keystroke,
                 is_held,
                 prefer_character_input: false,
@@ -113,7 +117,17 @@ impl TestEventExt for Window {
         let mut keystroke = parse_key(key, cx);
         self.render_frame(cx);
         keystroke.modifiers |= self.modifiers();
-        self.dispatch_event(KeyUpEvent { keystroke }.to_platform_input(), cx);
+        self.dispatch_event(
+            KeyUpEvent {
+                #[cfg(not(feature = "gpui-fast"))]
+                physical_key: None,
+                #[cfg(not(feature = "gpui-fast"))]
+                key_metadata: None,
+                keystroke,
+            }
+            .to_platform_input(),
+            cx,
+        );
         self.render_frame(cx);
     }
 }

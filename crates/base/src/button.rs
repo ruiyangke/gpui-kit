@@ -370,11 +370,21 @@ mod tests {
             let keystroke =
                 cx.update(|_, cx| Keystroke::parse_with_os(key, cx.platform_info().os).unwrap());
             cx.simulate_event(KeyDownEvent {
+                #[cfg(not(feature = "gpui-fast"))]
+                physical_key: None,
+                #[cfg(not(feature = "gpui-fast"))]
+                key_metadata: None,
                 keystroke: keystroke.clone(),
                 is_held: false,
                 prefer_character_input: false,
             });
-            cx.simulate_event(KeyUpEvent { keystroke });
+            cx.simulate_event(KeyUpEvent {
+                #[cfg(not(feature = "gpui-fast"))]
+                physical_key: None,
+                #[cfg(not(feature = "gpui-fast"))]
+                key_metadata: None,
+                keystroke,
+            });
         }
 
         assert_eq!(button_clicks.get(), 2);
@@ -433,11 +443,21 @@ mod tests {
         let keystroke =
             cx.update(|_, cx| Keystroke::parse_with_os(key, cx.platform_info().os).unwrap());
         cx.simulate_event(KeyDownEvent {
+            #[cfg(not(feature = "gpui-fast"))]
+            physical_key: None,
+            #[cfg(not(feature = "gpui-fast"))]
+            key_metadata: None,
             keystroke: keystroke.clone(),
             is_held: false,
             prefer_character_input: false,
         });
-        cx.simulate_event(KeyUpEvent { keystroke });
+        cx.simulate_event(KeyUpEvent {
+            #[cfg(not(feature = "gpui-fast"))]
+            physical_key: None,
+            #[cfg(not(feature = "gpui-fast"))]
+            key_metadata: None,
+            keystroke,
+        });
         cx.update(|window, cx| window.draw(cx).clear(cx));
     }
 

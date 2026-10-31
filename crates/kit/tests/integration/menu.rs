@@ -281,6 +281,10 @@ fn press_context_menu_key(handle: AnyWindowHandle, key: &str, cx: &mut TestAppCo
     cx.update_window(handle, |_, window, cx| {
         window.dispatch_event(
             KeyDownEvent {
+                #[cfg(not(feature = "gpui-fast"))]
+                physical_key: None,
+                #[cfg(not(feature = "gpui-fast"))]
+                key_metadata: None,
                 keystroke: keystroke.clone(),
                 is_held: false,
                 prefer_character_input: false,
@@ -294,7 +298,17 @@ fn press_context_menu_key(handle: AnyWindowHandle, key: &str, cx: &mut TestAppCo
     // dismissal subscription before key-up can redraw and refocus the menu.
     cx.run_until_parked();
     cx.update_window(handle, |_, window, cx| {
-        window.dispatch_event(KeyUpEvent { keystroke }.to_platform_input(), cx);
+        window.dispatch_event(
+            KeyUpEvent {
+                #[cfg(not(feature = "gpui-fast"))]
+                physical_key: None,
+                #[cfg(not(feature = "gpui-fast"))]
+                key_metadata: None,
+                keystroke,
+            }
+            .to_platform_input(),
+            cx,
+        );
     })
     .unwrap();
     cx.run_until_parked();

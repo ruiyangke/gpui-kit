@@ -1497,6 +1497,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             autocapitalize: self.autocapitalize.unwrap_or(Autocapitalize::None),
             suggestions: autocorrect,
             input_action,
+            terminal_keys: false,
         }
     }
 
