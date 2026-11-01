@@ -4,3 +4,4 @@
 0004-gpui_windows-Drop-a-closed-window-s-late-reports.patch
 0005-gpui_windows-Keep-the-client-size-across-DPI-changes.patch
 0006-gpui_windows-Untrack-a-window-while-it-is-destroyed.patch
+0007-gpui_macos-Present-the-last-frame-when-a-window-is-s.patch

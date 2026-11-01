@@ -46,6 +46,7 @@ GPUI Kit depends on `gpui-pre`, GPUI Kit's snapshot of Zed's GPUI crates. Its ba
 | 0004 close | Drops a closed window's late activation and hover reports, which otherwise log "window not found" | Remote apps on Windows |
 | 0005 dpi | Keeps a window's client size across DPI changes (`WM_GETDPISCALEDSIZE`) | Remote apps on Windows; mixed-DPI monitors |
 | 0006 untrack | Takes a window off the vsync list while it is destroyed, before a redraw can reach the dead handle ("Invalid window handle") | Remote apps on Windows |
+| 0007 present | Presents the last frame again when a macOS window is shown or AppKit asks for its layer, after macOS discarded the contents of the hidden window | Idle windows, including Remote apps, going transparent on the Mac |
 
 To move to a newer snapshot, stage it with the generator, commit it as a root commit and tag it `gpui-pre-v<version>`, then follow "Move to a new release" with `gpui` before the tag, and update the pin in 0001.
 
