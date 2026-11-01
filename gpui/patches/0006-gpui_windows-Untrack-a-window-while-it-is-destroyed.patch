@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ruiyangke <me@ry.ke>
+Date: Sat, 31 Oct 2026 00:00:03 +0000
+Subject: [PATCH] gpui_windows: Untrack a window while it is destroyed
+
+The vsync thread invalidates every tracked window. A destroyed window left
+that list only when the WM_GPUI_CLOSE_ONE_WINDOW posted from WM_DESTROY was
+handled, so a vsync in between called RedrawWindow on a dead handle and
+logged "Invalid window handle (0x80070578)", most often when a closing
+dialog hands focus back to its parent. Send the message instead: the window
+leaves the list during WM_DESTROY, while its handle is still valid.
+
+The UI thread now takes the list's write lock inside DestroyWindow, so
+device-lost recovery copies the handles out rather than holding the read
+lock across a SendMessageW that waits for the UI thread.
+
+Remove when upstream gpui_windows untracks a window before its handle is
+destroyed.
+---
+ crates/gpui_windows/src/events.rs   | 13 +++++++------
+ crates/gpui_windows/src/platform.rs | 17 +++++++++++++----
+ 2 files changed, 20 insertions(+), 10 deletions(-)
+
+diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
+index c8a76ce9..3ce94ffb 100644
+--- a/crates/gpui_windows/src/events.rs
++++ b/crates/gpui_windows/src/events.rs
+@@ -578,14 +578,15 @@ impl WindowsWindowInner {
+         if let Some(callback) = callback {
+             callback();
+         }
++        // Sent, not posted: the window leaves the vsync thread's list while the
++        // handle is still valid, before `DestroyWindow` returns.
+         unsafe {
+-            PostMessageW(
+-                Some(self.platform_window_handle),
++            SendMessageW(
++                self.platform_window_handle,
+                 WM_GPUI_CLOSE_ONE_WINDOW,
+-                WPARAM(self.validation_number),
+-                LPARAM(handle.0 as isize),
+-            )
+-            .log_err();
++                Some(WPARAM(self.validation_number)),
++                Some(LPARAM(handle.0 as isize)),
++            );
+         }
+         Some(0)
+     }
+diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
+index 095e009e..fae7eccb 100644
+--- a/crates/gpui_windows/src/platform.rs
++++ b/crates/gpui_windows/src/platform.rs
+@@ -1741,10 +1741,19 @@ fn handle_gpu_device_lost(
+         text_system.handle_gpu_lost(&directx_devices)?;
+     }
+     if let Some(all_windows) = all_windows.upgrade() {
+-        for window in all_windows.read().iter() {
++        // The UI thread takes the write lock to add or remove a window, so don't
++        // hold the read lock across a `SendMessageW` that waits for that thread.
++        let windows = || -> SmallVec<[HWND; 4]> {
++            all_windows
++                .read()
++                .iter()
++                .map(TrackedWindow::as_raw)
++                .collect()
++        };
++        for window in windows() {
+             unsafe {
+                 SendMessageW(
+-                    window.as_raw(),
++                    window,
+                     WM_GPUI_GPU_DEVICE_LOST,
+                     Some(WPARAM(validation_number)),
+                     Some(lparam),
+@@ -1752,10 +1761,10 @@ fn handle_gpu_device_lost(
+             }
+         }
+         std::thread::sleep(std::time::Duration::from_millis(200));
+-        for window in all_windows.read().iter() {
++        for window in windows() {
+             unsafe {
+                 SendMessageW(
+-                    window.as_raw(),
++                    window,
+                     WM_GPUI_FORCE_UPDATE_WINDOW,
+                     Some(WPARAM(validation_number)),
+                     None,

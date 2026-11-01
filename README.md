@@ -43,8 +43,9 @@ GPUI Kit depends on `gpui-pre`, GPUI Kit's snapshot of Zed's GPUI crates. Its ba
 | 0001 keyboard | Physical key and native layout metadata on key events; `Window::numlock()` | Terminal key encoding |
 | 0002 tests | GPUI's own tests build inside the snapshot | Testing these patches |
 | 0003 windows | Window control, popups, focus, UTF-16 text input and file drops on Windows | Remote apps on Windows |
-| 0004 close | Drops a closed window's activation report, which otherwise logs "window not found" | Remote apps on Windows |
+| 0004 close | Drops a closed window's late activation and hover reports, which otherwise log "window not found" | Remote apps on Windows |
 | 0005 dpi | Keeps a window's client size across DPI changes (`WM_GETDPISCALEDSIZE`) | Remote apps on Windows; mixed-DPI monitors |
+| 0006 untrack | Takes a window off the vsync list while it is destroyed, before a redraw can reach the dead handle ("Invalid window handle") | Remote apps on Windows |
 
 To move to a newer snapshot, stage it with the generator, commit it as a root commit and tag it `gpui-pre-v<version>`, then follow "Move to a new release" with `gpui` before the tag, and update the pin in 0001.
 

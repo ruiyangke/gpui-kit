@@ -279,7 +279,7 @@ index 7b08bd28..47a35299 100644
 +    }
  }
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index 71981062..7d644269 100644
+index a0b7819d..593a55a6 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
 @@ -185,6 +185,7 @@ pub(crate) struct WindowsWindowInner {
