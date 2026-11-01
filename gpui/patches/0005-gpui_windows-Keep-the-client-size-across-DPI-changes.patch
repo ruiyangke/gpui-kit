@@ -6,27 +6,31 @@ Subject: [PATCH] gpui_windows: Keep the client size across DPI changes
 Windows scales a whole window for a new DPI, native frame included, so the
 client drifts from its logical size: a native-frame window at 150 % ended a
 couple of points small. Answer WM_GETDPISCALEDSIZE with the client scaled
-exactly plus the frame measured at the new DPI.
+exactly plus the frame measured at the new DPI, without the caption of a
+window that hides its title bar. Windows may place a window again at the
+size it would have scaled it to; keep the answer then.
 
 Remove when upstream gpui_windows handles WM_GETDPISCALEDSIZE.
 ---
- crates/gpui_windows/src/events.rs        | 41 ++++++++++++++++++++++++
- crates/gpui_windows/src/native_resize.rs | 40 +++++++++++++++++++++++
- 2 files changed, 81 insertions(+)
+ crates/gpui_windows/src/events.rs        |  79 ++++++++++++
+ crates/gpui_windows/src/native_resize.rs | 148 +++++++++++++++++++++++
+ crates/gpui_windows/src/window.rs        |   2 +
+ 3 files changed, 229 insertions(+)
 
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 3e4d364e..ac052f25 100644
+index 3e4d364e..c8a76ce9 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
-@@ -245,6 +245,7 @@ impl WindowsWindowInner {
+@@ -245,6 +245,8 @@ impl WindowsWindowInner {
              }
              WM_TIMER => self.handle_timer_msg(handle, wparam),
              WM_NCCALCSIZE => self.handle_calc_client_size(handle, wparam, lparam),
 +            WM_GETDPISCALEDSIZE => self.handle_get_dpi_scaled_size_msg(handle, wparam, lparam),
++            WM_WINDOWPOSCHANGING => self.handle_window_pos_changing_msg(handle, lparam),
              WM_DPICHANGED => self.handle_dpi_changed_msg(handle, wparam, lparam),
              WM_DISPLAYCHANGE => self.handle_display_change_msg(handle),
              WM_NCHITTEST => self.handle_hit_test_msg(handle, lparam),
-@@ -1303,6 +1304,46 @@ impl WindowsWindowInner {
+@@ -1303,6 +1305,83 @@ impl WindowsWindowInner {
          }
      }
  
@@ -39,14 +43,18 @@ index 3e4d364e..ac052f25 100644
 +        wparam: WPARAM,
 +        lparam: LPARAM,
 +    ) -> Option<isize> {
++        self.dpi_resize.set(None);
 +        if self.state.is_maximized()
 +            || self.state.is_fullscreen()
 +            || unsafe { IsIconic(handle) }.as_bool()
 +        {
 +            return None;
 +        }
++        let mut outer = RECT::default();
++        unsafe { GetWindowRect(handle, &mut outer) }.ok()?;
 +        let mut client = RECT::default();
 +        unsafe { GetClientRect(handle, &mut client) }.ok()?;
++        let from = unsafe { GetDpiForWindow(handle) };
 +        let dpi = wparam.0 as u32;
 +        let chrome = if self.state.decorations.get() == WindowDecorations::Client {
 +            [0, 0]
@@ -55,11 +63,14 @@ index 3e4d364e..ac052f25 100644
 +            let style = WINDOW_STYLE(unsafe { get_window_long(handle, GWL_STYLE) } as u32);
 +            let extended = WINDOW_EX_STYLE(unsafe { get_window_long(handle, GWL_EXSTYLE) } as u32);
 +            unsafe { AdjustWindowRectExForDpi(&mut frame, style, false, extended, dpi) }.ok()?;
-+            [frame.right - frame.left, frame.bottom - frame.top]
++            crate::native_resize::frame_chrome(
++                [frame.left, frame.top, frame.right, frame.bottom],
++                self.hide_title_bar,
++            )?
 +        };
 +        let [width, height] = crate::native_resize::dpi_scaled_size(
 +            [client.right - client.left, client.bottom - client.top],
-+            unsafe { GetDpiForWindow(handle) },
++            from,
 +            dpi,
 +            chrome,
 +        )?;
@@ -67,17 +78,47 @@ index 3e4d364e..ac052f25 100644
 +        let size = unsafe { &mut *(lparam.0 as *mut SIZE) };
 +        size.cx = width;
 +        size.cy = height;
++        self.dpi_resize.set(crate::native_resize::DpiResize::new(
++            [outer.right - outer.left, outer.bottom - outer.top],
++            from,
++            dpi,
++            [width, height],
++        ));
 +        Some(1)
++    }
++
++    /// After the display change, Windows may place a window again at the
++    /// size it scales the old window to on its own, undoing the
++    /// WM_GETDPISCALEDSIZE answer; keep the answer instead.
++    fn handle_window_pos_changing_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
++        let resize = self.dpi_resize.get()?;
++        // SAFETY: WM_WINDOWPOSCHANGING supplies a writable WINDOWPOS.
++        let position = unsafe { &mut *(lparam.0 as *mut WINDOWPOS) };
++        if position.flags.0 & SWP_NOSIZE.0 != 0 {
++            return None;
++        }
++        match resize.place(
++            unsafe { GetDpiForWindow(handle) },
++            [position.cx, position.cy],
++        ) {
++            crate::native_resize::DpiPlacement::Keep => {}
++            crate::native_resize::DpiPlacement::Replace([width, height]) => {
++                position.cx = width;
++                position.cy = height;
++            }
++            crate::native_resize::DpiPlacement::End => self.dpi_resize.set(None),
++        }
++        None
 +    }
 +
      fn handle_dpi_changed_msg(
          &self,
          handle: HWND,
 diff --git a/crates/gpui_windows/src/native_resize.rs b/crates/gpui_windows/src/native_resize.rs
-index 7b08bd28..07688515 100644
+index 7b08bd28..47a35299 100644
 --- a/crates/gpui_windows/src/native_resize.rs
 +++ b/crates/gpui_windows/src/native_resize.rs
-@@ -152,6 +152,32 @@ fn anchor(mut rect: [i32; 4], edge: u32, size: [i32; 2]) -> Option<[i32; 4]> {
+@@ -152,6 +152,95 @@ fn anchor(mut rect: [i32; 4], edge: u32, size: [i32; 2]) -> Option<[i32; 4]> {
      Some(rect)
  }
  
@@ -107,10 +148,73 @@ index 7b08bd28..07688515 100644
 +    Some(size)
 +}
 +
++/// The native frame around a client at one DPI, from the window rectangle
++/// `AdjustWindowRectExForDpi` gives an empty client. A window that hides its
++/// title bar keeps the frame's top as client area (see WM_NCCALCSIZE).
++pub(crate) fn frame_chrome(frame: [i32; 4], hide_title_bar: bool) -> Option<[i32; 2]> {
++    let [left, top, right, bottom] = frame;
++    let top = if hide_title_bar { 0 } else { top };
++    let chrome = [right.checked_sub(left)?, bottom.checked_sub(top)?];
++    chrome
++        .iter()
++        .all(|n| (0..MAX_EXTENT).contains(n))
++        .then_some(chrome)
++}
++
++/// The outer size answered for a DPI change, and the size Windows scales the
++/// old outer size to on its own. After the display change, Windows may place
++/// the window again at its own size; that placement keeps the answer.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) struct DpiResize {
++    dpi: u32,
++    answer: [i32; 2],
++    system: [i32; 2],
++}
++
++/// What a proposed resize does to a [`DpiResize`].
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum DpiPlacement {
++    /// The answered size; keep watching.
++    Keep,
++    /// Windows' own size: use the answer instead.
++    Replace([i32; 2]),
++    /// Any other resize is newer intent; stop watching.
++    End,
++}
++
++impl DpiResize {
++    pub(crate) fn new(outer: [i32; 2], from: u32, to: u32, answer: [i32; 2]) -> Option<Self> {
++        if from == 0 || to == 0 || !outer.iter().all(|n| (1..=MAX_EXTENT).contains(n)) {
++            return None;
++        }
++        // Windows rounds the scaled size to the nearest pixel.
++        let system = outer.map(|n| {
++            ((i64::from(n) * i64::from(to) + i64::from(from) / 2) / i64::from(from)) as i32
++        });
++        (system != answer).then_some(Self {
++            dpi: to,
++            answer,
++            system,
++        })
++    }
++
++    pub(crate) fn place(self, dpi: u32, proposed: [i32; 2]) -> DpiPlacement {
++        if dpi != self.dpi {
++            DpiPlacement::End
++        } else if proposed == self.answer {
++            DpiPlacement::Keep
++        } else if (0..2).all(|axis| (proposed[axis] - self.system[axis]).abs() <= 1) {
++            DpiPlacement::Replace(self.answer)
++        } else {
++            DpiPlacement::End
++        }
++    }
++}
++
  #[cfg(test)]
  mod tests {
      use super::*;
-@@ -256,4 +282,18 @@ mod tests {
+@@ -256,4 +345,63 @@ mod tests {
                  .is_none()
          );
      }
@@ -128,4 +232,69 @@ index 7b08bd28..07688515 100644
 +        assert!(dpi_scaled_size([800, 600], 96, 144, [-1, 0]).is_none());
 +        assert!(dpi_scaled_size([MAX_EXTENT, 600], 96, 192, [0, 0]).is_none());
 +    }
++
++    #[test]
++    fn a_hidden_title_bar_keeps_only_the_side_and_bottom_frame() {
++        // WS_OVERLAPPEDWINDOW at 192 DPI: 13-pixel borders and a 45-pixel caption.
++        let frame = [-13, -58, 13, 13];
++        assert_eq!(frame_chrome(frame, false), Some([26, 71]));
++        assert_eq!(frame_chrome(frame, true), Some([26, 13]));
++        assert!(frame_chrome([13, 0, -13, 13], false).is_none());
++    }
++
++    #[test]
++    fn windows_placing_a_window_at_its_own_dpi_size_keeps_the_answer() {
++        // QTerminal at 200 % to 150 %: the answer keeps a 1580x630 client,
++        // Windows' own size is three quarters of 2132x911.
++        let resize = DpiResize::new([2132, 911], 192, 144, [1602, 686]).unwrap();
++        assert_eq!(resize.place(144, [1602, 686]), DpiPlacement::Keep);
++        assert_eq!(
++            resize.place(144, [1599, 683]),
++            DpiPlacement::Replace([1602, 686])
++        );
++        // Back to 200 %: 1602x686 by four thirds is 2136x914.67.
++        let resize = DpiResize::new([1602, 686], 144, 192, [2133, 911]).unwrap();
++        assert_eq!(
++            resize.place(192, [2136, 915]),
++            DpiPlacement::Replace([2133, 911])
++        );
++        // Windows' rounding may differ by a pixel (1409 by four thirds is 1878.67).
++        let resize = DpiResize::new([1571, 1409], 144, 192, [2094, 1879]).unwrap();
++        assert_eq!(
++            resize.place(192, [2095, 1878]),
++            DpiPlacement::Replace([2094, 1879])
++        );
++    }
++
++    #[test]
++    fn any_other_resize_or_dpi_ends_the_dpi_resize() {
++        let resize = DpiResize::new([2132, 911], 192, 144, [1602, 686]).unwrap();
++        assert_eq!(resize.place(144, [1700, 686]), DpiPlacement::End);
++        assert_eq!(resize.place(144, [1597, 683]), DpiPlacement::End);
++        assert_eq!(resize.place(192, [1599, 683]), DpiPlacement::End);
++        // Nothing to keep when Windows' own size is the answer.
++        assert!(DpiResize::new([2132, 912], 192, 144, [1599, 684]).is_none());
++        assert!(DpiResize::new([2132, 911], 0, 144, [1602, 686]).is_none());
++        assert!(DpiResize::new([0, 911], 192, 144, [1602, 686]).is_none());
++    }
  }
+diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
+index 71981062..7d644269 100644
+--- a/crates/gpui_windows/src/window.rs
++++ b/crates/gpui_windows/src/window.rs
+@@ -185,6 +185,7 @@ pub(crate) struct WindowsWindowInner {
+     pub(crate) is_minimizable: Cell<bool>,
+     maximizable: Cell<Option<bool>>,
+     pending_maximize: Cell<Option<bool>>,
++    pub(crate) dpi_resize: Cell<Option<crate::native_resize::DpiResize>>,
+     pub(crate) executor: ForegroundExecutor,
+     pub(crate) validation_number: usize,
+     pub(crate) main_receiver: PriorityQueueReceiver<RunnableVariant>,
+@@ -484,6 +485,7 @@ impl WindowsWindowInner {
+             is_minimizable: Cell::new(context.is_minimizable),
+             maximizable: Cell::new(None),
+             pending_maximize: Cell::new(None),
++            dpi_resize: Cell::new(None),
+             executor: context.executor.clone(),
+             validation_number: context.validation_number,
+             main_receiver: context.main_receiver.clone(),
