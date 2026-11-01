@@ -3,7 +3,7 @@ From: ruiyangke <me@ry.ke>
 Date: Sat, 31 Oct 2026 00:00:00 -0700
 Subject: [PATCH] gpui: Pin Newport's GPUI snapshot
 
-Pin the six gpui-pre 0.3.10 crates to ruiyangke/gpui-kit@5814f246
+Pin the six gpui-pre 0.3.10 crates to ruiyangke/gpui-kit@14ef359a
 (branch newport/gpui-pre-v0.3.10). That branch is gpui-pre 0.3.10 (Zed
 08cbb88) as GPUI Kit's generator stages it, plus Newport's GPUI patch
 series in gpui/ on newport/patches.
@@ -53,12 +53,12 @@ index 32ec03fa..d6e6d096 100644
   "gpui-fast-platform",
 - "gpui-pre",
 - "gpui-pre-macros",
-+ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-macros 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-macros 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "gpui-pre-platform",
   "gpui-pre-reqwest-client",
 - "gpui-pre-sum-tree",
-+ "gpui-pre-sum-tree 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-sum-tree 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "html5ever 0.27.0",
   "indoc",
   "instant",
@@ -67,7 +67,7 @@ index 32ec03fa..d6e6d096 100644
   "gpui-fast",
   "gpui-fast-platform",
 - "gpui-pre",
-+ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "gpui-pre-platform",
   "gpui-pre-reqwest-client",
   "syntect",
@@ -76,7 +76,7 @@ index 32ec03fa..d6e6d096 100644
   "gpui-fast",
   "gpui-fast-platform",
 - "gpui-pre",
-+ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "gpui-pre-platform",
   "gpui-pre-reqwest-client",
   "log",
@@ -87,9 +87,9 @@ index 32ec03fa..d6e6d096 100644
 - "gpui-pre",
 - "gpui-pre-macros",
 - "gpui-pre-sum-tree",
-+ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-macros 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-sum-tree 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-macros 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-sum-tree 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "indoc",
   "instant",
   "itertools 0.13.0",
@@ -254,7 +254,7 @@ index 32ec03fa..d6e6d096 100644
   "core-graphics 0.24.0",
   "gpui-fast",
 - "gpui-pre",
-+ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "libc",
   "objc2-core-foundation",
   "objc2-io-kit",
@@ -264,8 +264,8 @@ index 32ec03fa..d6e6d096 100644
   "gpui-kit-assets",
 - "gpui-pre",
 - "gpui-pre-macros",
-+ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-macros 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-macros 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "gpui-pre-platform",
   "gpui-pre-web",
   "lsp-types 0.97.0",
@@ -274,7 +274,7 @@ index 32ec03fa..d6e6d096 100644
   "gpui-fast",
   "gpui-fast-platform",
 - "gpui-pre",
-+ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "gpui-pre-platform",
   "gpui-pre-reqwest",
   "log",
@@ -343,7 +343,7 @@ index 32ec03fa..d6e6d096 100644
 +[[package]]
 +name = "gpui-pre"
 +version = "0.3.10"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
  dependencies = [
   "accesskit",
   "anyhow",
@@ -360,15 +360,15 @@ index 32ec03fa..d6e6d096 100644
 - "gpui-pre-shared-string",
 - "gpui-pre-sum-tree",
 - "gpui-pre-util",
-+ "gpui-pre-bench-metrics 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-http-client 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-macros 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-refineable 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-scheduler 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-shared-string 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-sum-tree 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-bench-metrics 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-http-client 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-macros 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-refineable 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-scheduler 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-shared-string 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-sum-tree 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "hdrhistogram",
   "heapless",
   "image",
@@ -405,7 +405,7 @@ index 32ec03fa..d6e6d096 100644
 +[[package]]
 +name = "gpui-pre-apple"
 +version = "0.3.10"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
 +dependencies = [
 + "anyhow",
 + "async-task",
@@ -420,9 +420,9 @@ index 32ec03fa..d6e6d096 100644
 + "etagere",
 + "foreign-types",
 + "futures",
-+ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
 + "image",
 + "libc",
 + "log",
@@ -451,7 +451,7 @@ index 32ec03fa..d6e6d096 100644
 +[[package]]
 +name = "gpui-pre-bench-metrics"
 +version = "0.3.10"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
 +dependencies = [
 + "anyhow",
 + "criterion",
@@ -474,9 +474,9 @@ index 32ec03fa..d6e6d096 100644
 +[[package]]
 +name = "gpui-pre-collections"
 +version = "0.3.10"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
 +dependencies = [
-+ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "indexmap",
   "rustc-hash 2.1.3",
  ]
@@ -487,7 +487,7 @@ index 32ec03fa..d6e6d096 100644
 +[[package]]
 +name = "gpui-pre-derive-refineable"
 +version = "0.3.10"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
 +dependencies = [
 + "proc-macro2",
 + "quote",
@@ -504,7 +504,7 @@ index 32ec03fa..d6e6d096 100644
 +[[package]]
 +name = "gpui-pre-http-client"
 +version = "0.3.10"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
 +dependencies = [
 + "anyhow",
 + "bytes",
@@ -524,7 +524,7 @@ index 32ec03fa..d6e6d096 100644
  version = "0.3.10"
 -source = "registry+https://github.com/rust-lang/crates.io-index"
 -checksum = "13a487328e5cf704b44f3e6ca0b86b7688f2c488ce66cace071e713df94810d7"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
  dependencies = [
   "log",
   "rustls",
@@ -550,13 +550,13 @@ index 32ec03fa..d6e6d096 100644
 +[[package]]
 +name = "gpui-pre-ios"
 +version = "0.3.10"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
 +dependencies = [
 + "anyhow",
 + "block2 0.6.2",
 + "futures",
-+ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-apple 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-apple 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "log",
   "objc2 0.6.4",
   "objc2-core-foundation",
@@ -566,7 +566,7 @@ index 32ec03fa..d6e6d096 100644
  version = "0.3.10"
 -source = "registry+https://github.com/rust-lang/crates.io-index"
 -checksum = "7c6ffd2dce7b75cce0bb3382994912f84c2a05389a4a236bb8bd72cb098fc083"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
  dependencies = [
   "accesskit",
   "accesskit_unix",
@@ -578,10 +578,10 @@ index 32ec03fa..d6e6d096 100644
 - "gpui-pre-collections",
 - "gpui-pre-http-client",
 - "gpui-pre-util",
-+ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-http-client 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-http-client 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "gpui-pre-wgpu",
   "libc",
   "log",
@@ -606,7 +606,7 @@ index 32ec03fa..d6e6d096 100644
  version = "0.3.10"
 -source = "registry+https://github.com/rust-lang/crates.io-index"
 -checksum = "7e07a5e5c84f0b2160c194a1c852cc89d1942db66867938ceabcd7f763cb4386"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
  dependencies = [
   "accesskit",
   "accesskit_macos",
@@ -619,11 +619,11 @@ index 32ec03fa..d6e6d096 100644
 - "gpui-pre-collections",
 - "gpui-pre-scheduler",
 - "gpui-pre-util",
-+ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-apple 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-scheduler 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-apple 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-scheduler 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "image",
   "itertools 0.14.0",
   "log",
@@ -634,7 +634,7 @@ index 32ec03fa..d6e6d096 100644
 +[[package]]
 +name = "gpui-pre-macros"
 +version = "0.3.10"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
 +dependencies = [
 + "heck 0.5.0",
 + "proc-macro-crate 3.5.0",
@@ -648,14 +648,14 @@ index 32ec03fa..d6e6d096 100644
  version = "0.3.10"
 -source = "registry+https://github.com/rust-lang/crates.io-index"
 -checksum = "e8a7f07a15187e82ec76491492c7e3245db1b59633d3bedb00b828ffaf67c4b8"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
  dependencies = [
   "anyhow",
   "console_error_panic_hook",
 - "gpui-pre",
 - "gpui-pre-ios",
-+ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-ios 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-ios 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "gpui-pre-linux",
   "gpui-pre-macos",
   "gpui-pre-web",
@@ -670,9 +670,9 @@ index 32ec03fa..d6e6d096 100644
 +[[package]]
 +name = "gpui-pre-refineable"
 +version = "0.3.10"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
 +dependencies = [
-+ "gpui-pre-derive-refineable 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-derive-refineable 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
  ]
  
  [[package]]
@@ -682,17 +682,17 @@ index 32ec03fa..d6e6d096 100644
  version = "0.3.10"
 -source = "registry+https://github.com/rust-lang/crates.io-index"
 -checksum = "ca7eada23ad3c3cff486fd7ab5d92abb82236188cca61cde708adf54cb436226"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
  dependencies = [
   "anyhow",
   "bytes",
   "futures",
 - "gpui-pre-http-client",
-+ "gpui-pre-http-client 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-http-client 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "gpui-pre-http-client-tls",
   "gpui-pre-reqwest",
 - "gpui-pre-util",
-+ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "log",
   "regex",
   "tokio",
@@ -708,7 +708,7 @@ index 32ec03fa..d6e6d096 100644
 +[[package]]
 +name = "gpui-pre-scheduler"
 +version = "0.3.10"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
 +dependencies = [
 + "async-task",
 + "backtrace",
@@ -728,7 +728,7 @@ index 32ec03fa..d6e6d096 100644
 +[[package]]
 +name = "gpui-pre-shared-string"
 +version = "0.3.10"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
 +dependencies = [
 + "schemars",
 + "serde",
@@ -751,9 +751,9 @@ index 32ec03fa..d6e6d096 100644
 +[[package]]
 +name = "gpui-pre-sum-tree"
 +version = "0.3.10"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
 +dependencies = [
-+ "gpui-pre-ztracing 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-ztracing 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "heapless",
   "rayon",
   "tracing",
@@ -764,7 +764,7 @@ index 32ec03fa..d6e6d096 100644
 +[[package]]
 +name = "gpui-pre-util"
 +version = "0.3.10"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
 +dependencies = [
 + "anyhow",
 + "log",
@@ -776,7 +776,7 @@ index 32ec03fa..d6e6d096 100644
  version = "0.3.10"
 -source = "registry+https://github.com/rust-lang/crates.io-index"
 -checksum = "1acd86af2347f0dd8b63c441a5dbd43b3fcd7dac69b340827c3497da5a13d6fb"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
  dependencies = [
   "anyhow",
   "async-channel",
@@ -785,9 +785,9 @@ index 32ec03fa..d6e6d096 100644
 - "gpui-pre",
 - "gpui-pre-http-client",
 - "gpui-pre-scheduler",
-+ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-http-client 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-scheduler 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-http-client 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-scheduler 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "gpui-pre-wgpu",
   "js-sys",
   "log",
@@ -806,7 +806,7 @@ index 32ec03fa..d6e6d096 100644
  version = "0.3.10"
 -source = "registry+https://github.com/rust-lang/crates.io-index"
 -checksum = "ce693915768aae38bf788f245af75aae78e3e1179245860fc80ce831d0a8f74e"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
  dependencies = [
   "anyhow",
   "bytemuck",
@@ -815,9 +815,9 @@ index 32ec03fa..d6e6d096 100644
 - "gpui-pre",
 - "gpui-pre-collections",
 - "gpui-pre-util",
-+ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "image",
   "itertools 0.14.0",
   "log",
@@ -834,7 +834,7 @@ index 32ec03fa..d6e6d096 100644
  version = "0.3.10"
 -source = "registry+https://github.com/rust-lang/crates.io-index"
 -checksum = "80670f987b920fba019917b2e222ecf2b377f2a6d77872010c7d284c235837b3"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
  dependencies = [
   "accesskit",
   "accesskit_windows",
@@ -846,10 +846,10 @@ index 32ec03fa..d6e6d096 100644
 - "gpui-pre-collections",
 - "gpui-pre-scheduler",
 - "gpui-pre-util",
-+ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-scheduler 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
-+ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-collections 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-scheduler 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
++ "gpui-pre-util 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "image",
   "itertools 0.14.0",
   "log",
@@ -865,9 +865,9 @@ index 32ec03fa..d6e6d096 100644
 +[[package]]
 +name = "gpui-pre-ztracing"
 +version = "0.3.10"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
 +dependencies = [
-+ "gpui-pre-ztracing-macro 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre-ztracing-macro 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "tracing",
  ]
  
@@ -878,7 +878,7 @@ index 32ec03fa..d6e6d096 100644
 +[[package]]
 +name = "gpui-pre-ztracing-macro"
 +version = "0.3.10"
-+source = "git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef#5814f2465c8c4a5fcd01687abd3163d6c35860ef"
++source = "git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28#14ef359a1e6a1afb59d774c39832291bcfe80e28"
 +
  [[package]]
  name = "gpui-shell"
@@ -888,7 +888,7 @@ index 32ec03fa..d6e6d096 100644
   "gpui-fps",
   "gpui-kit",
 - "gpui-pre",
-+ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=5814f2465c8c4a5fcd01687abd3163d6c35860ef)",
++ "gpui-pre 0.3.10 (git+https://github.com/ruiyangke/gpui-kit?rev=14ef359a1e6a1afb59d774c39832291bcfe80e28)",
   "gpui-pre-platform",
   "gpui-pre-reqwest",
   "gpui-webview",
@@ -1068,9 +1068,9 @@ index 1b161e44..78859145 100644
 -gpui = { package = "gpui-pre", version = "=0.3.10" }
 -gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 -gpui_web = { package = "gpui-pre-web", version = "=0.3.10" }
-+gpui = { package = "gpui-pre", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "5814f2465c8c4a5fcd01687abd3163d6c35860ef" }
-+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "5814f2465c8c4a5fcd01687abd3163d6c35860ef", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-+gpui_web = { package = "gpui-pre-web", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "5814f2465c8c4a5fcd01687abd3163d6c35860ef" }
++gpui = { package = "gpui-pre", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "14ef359a1e6a1afb59d774c39832291bcfe80e28" }
++gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "14ef359a1e6a1afb59d774c39832291bcfe80e28", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
++gpui_web = { package = "gpui-pre-web", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "14ef359a1e6a1afb59d774c39832291bcfe80e28" }
  # Fast is optional; existing crates select it through their gpui-fast feature.
  # Explicit package fields make Cargo use these dependency keys as Rust crate names;
  # the packages declare the same library names as the pre backend.
@@ -1080,9 +1080,9 @@ index 1b161e44..78859145 100644
 -gpui_macros = { package = "gpui-pre-macros", version = "=0.3.10" }
 -reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.10" }
 -sum-tree = { package = "gpui-pre-sum-tree", version = "=0.3.10" }
-+gpui_macros = { package = "gpui-pre-macros", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "5814f2465c8c4a5fcd01687abd3163d6c35860ef" }
-+reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "5814f2465c8c4a5fcd01687abd3163d6c35860ef" }
-+sum-tree = { package = "gpui-pre-sum-tree", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "5814f2465c8c4a5fcd01687abd3163d6c35860ef" }
++gpui_macros = { package = "gpui-pre-macros", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "14ef359a1e6a1afb59d774c39832291bcfe80e28" }
++reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "14ef359a1e6a1afb59d774c39832291bcfe80e28" }
++sum-tree = { package = "gpui-pre-sum-tree", version = "=0.3.10", git = "https://github.com/ruiyangke/gpui-kit", rev = "14ef359a1e6a1afb59d774c39832291bcfe80e28" }
  reqwest = { package = "gpui-pre-reqwest", version = "=0.12.15", default-features = false, features = [
      "charset",
      "http2",

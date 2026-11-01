@@ -31,16 +31,16 @@ Every new trait method has a default; other platforms are unchanged.
  .../gpui_windows/examples/window_lifecycle.rs |   14 +
  .../examples/window_lifecycle/windows.rs      | 1684 +++++++++++++++++
  crates/gpui_windows/src/client_frame.rs       |  163 ++
- crates/gpui_windows/src/events.rs             |  712 ++++++-
+ crates/gpui_windows/src/events.rs             |  704 ++++++-
  crates/gpui_windows/src/file_drop.rs          |  387 ++++
  crates/gpui_windows/src/gpui_windows.rs       |    4 +
  crates/gpui_windows/src/native_characters.rs  |  524 +++++
  crates/gpui_windows/src/native_drag.rs        |  355 ++++
- crates/gpui_windows/src/native_resize.rs      |  217 +++
+ crates/gpui_windows/src/native_resize.rs      |  259 +++
  crates/gpui_windows/src/window.rs             |  990 ++++++++--
  .../src/window_appearance_tests.rs            |  135 ++
  crates/gpui_windows/src/window_state.rs       |   37 +
- 20 files changed, 6642 insertions(+), 213 deletions(-)
+ 20 files changed, 6676 insertions(+), 213 deletions(-)
  create mode 100644 crates/gpui/src/platform/native_drag.rs
  create mode 100644 crates/gpui/src/window/native_character_tests.rs
  create mode 100644 crates/gpui_windows/examples/input_lifecycle.rs
@@ -3821,7 +3821,7 @@ index 00000000..1a5ffa96
 +    }
 +}
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 996fcdb7..4464c816 100644
+index 996fcdb7..3e4d364e 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -31,6 +31,102 @@ pub(crate) const WM_GPUI_DISPLAYS_CHANGED: u32 = WM_USER + 10;
@@ -4011,7 +4011,7 @@ index 996fcdb7..4464c816 100644
              WM_SETCURSOR => self.handle_set_cursor(handle, lparam),
              WM_SETTINGCHANGE => self.handle_system_settings_changed(handle, wparam, lparam),
              WM_INPUTLANGCHANGE => self.handle_input_language_changed(),
-@@ -203,7 +350,100 @@ impl WindowsWindowInner {
+@@ -203,7 +350,92 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -4023,20 +4023,12 @@ index 996fcdb7..4464c816 100644
 +            GetWindowRect(self.native_handle(), &mut outer).ok()?;
 +            GetClientRect(self.native_handle(), &mut client).ok()?;
 +        }
-+        Some(crate::native_resize::Geometry {
-+            current: [outer.left, outer.top, outer.right, outer.bottom],
-+            chrome: [
-+                outer
-+                    .right
-+                    .checked_sub(outer.left)?
-+                    .checked_sub(client.right.checked_sub(client.left)?)?,
-+                outer
-+                    .bottom
-+                    .checked_sub(outer.top)?
-+                    .checked_sub(client.bottom.checked_sub(client.top)?)?,
-+            ],
-+            dpi: unsafe { GetDpiForWindow(self.native_handle()) },
-+        })
++        crate::native_resize::Geometry::measure(
++            [outer.left, outer.top, outer.right, outer.bottom],
++            [client.right - client.left, client.bottom - client.top],
++            self.state.decorations.get() == WindowDecorations::Client,
++            unsafe { GetDpiForWindow(self.native_handle()) },
++        )
 +    }
 +
 +    fn native_resize_policy(&self) -> Option<NativeResizeConstraint> {
@@ -4112,7 +4104,7 @@ index 996fcdb7..4464c816 100644
          let min_size = self.state.min_size?;
          let scale_factor = self.state.scale_factor.get();
          let boarder_offset = &self.state.border_offset;
-@@ -232,6 +472,13 @@ impl WindowsWindowInner {
+@@ -232,6 +464,13 @@ impl WindowsWindowInner {
              return Some(0);
          }
  
@@ -4126,7 +4118,7 @@ index 996fcdb7..4464c816 100644
          let width = lparam.loword().max(1) as i32;
          let height = lparam.hiword().max(1) as i32;
          let new_size = size(DevicePixels(width), DevicePixels(height));
-@@ -323,6 +570,8 @@ impl WindowsWindowInner {
+@@ -323,6 +562,8 @@ impl WindowsWindowInner {
      }
  
      fn handle_destroy_msg(&self, handle: HWND) -> Option<isize> {
@@ -4135,7 +4127,7 @@ index 996fcdb7..4464c816 100644
          let callback = { self.state.callbacks.close.take() };
          // Re-enable parent window if this was a modal dialog
          if let Some(parent_hwnd) = self.parent_hwnd {
-@@ -398,13 +647,14 @@ impl WindowsWindowInner {
+@@ -398,13 +639,14 @@ impl WindowsWindowInner {
      }
  
      fn handle_syskeyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
@@ -4157,7 +4149,7 @@ index 996fcdb7..4464c816 100644
          let mut func = self.state.callbacks.input.take()?;
  
          func(input);
-@@ -417,7 +667,10 @@ impl WindowsWindowInner {
+@@ -417,7 +659,10 @@ impl WindowsWindowInner {
      // It's a known bug that you can't trigger `ctrl-shift-0`. See:
      // https://superuser.com/questions/1455762/ctrl-shift-number-key-combination-has-stopped-working-for-a-few-numbers
      pub(crate) fn handle_keydown_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
@@ -4169,7 +4161,7 @@ index 996fcdb7..4464c816 100644
              wparam,
              lparam,
              &self.state,
-@@ -431,22 +684,165 @@ impl WindowsWindowInner {
+@@ -431,22 +676,165 @@ impl WindowsWindowInner {
                  })
              },
          ) else {
@@ -4341,7 +4333,7 @@ index 996fcdb7..4464c816 100644
              handle_key_event(wparam, lparam, &self.state, |keystroke, _, metadata| {
                  PlatformInput::KeyUp(KeyUpEvent {
                      physical_key: physical_key_from_lparam(lparam),
-@@ -469,7 +865,13 @@ impl WindowsWindowInner {
+@@ -469,7 +857,13 @@ impl WindowsWindowInner {
      }
  
      fn handle_char_msg(&self, wparam: WPARAM) -> Option<isize> {
@@ -4356,7 +4348,7 @@ index 996fcdb7..4464c816 100644
          self.with_input_handler(|input_handler| {
              input_handler.replace_text_in_range(None, &input);
          });
-@@ -501,6 +903,8 @@ impl WindowsWindowInner {
+@@ -501,6 +895,8 @@ impl WindowsWindowInner {
              click_count,
              first_mouse: false,
          });
@@ -4365,7 +4357,7 @@ index 996fcdb7..4464c816 100644
          let handled = !func(input).propagate;
          self.state.callbacks.input.set(Some(func));
  
-@@ -696,6 +1100,9 @@ impl WindowsWindowInner {
+@@ -696,6 +1092,9 @@ impl WindowsWindowInner {
          let ime_enabled = self
              .with_input_handler(|input_handler| input_handler.query_accepts_text_input())
              .unwrap_or(false);
@@ -4375,7 +4367,7 @@ index 996fcdb7..4464c816 100644
          if ime_enabled == self.state.ime_enabled.get() {
              return;
          }
-@@ -730,11 +1137,7 @@ impl WindowsWindowInner {
+@@ -730,11 +1129,7 @@ impl WindowsWindowInner {
      fn handle_ime_composition_inner(&self, ctx: HIMC, lparam: LPARAM) -> Option<isize> {
          let lparam = lparam.0 as u32;
          if lparam == 0 {
@@ -4388,7 +4380,7 @@ index 996fcdb7..4464c816 100644
              Some(0)
          } else {
              if lparam & GCS_RESULTSTR.0 > 0 {
-@@ -773,12 +1176,41 @@ impl WindowsWindowInner {
+@@ -773,12 +1168,41 @@ impl WindowsWindowInner {
          }
      }
  
@@ -4430,7 +4422,7 @@ index 996fcdb7..4464c816 100644
          if !self.hide_title_bar || self.state.is_fullscreen() || wparam.0 == 0 {
              return None;
          }
-@@ -796,8 +1228,15 @@ impl WindowsWindowInner {
+@@ -796,8 +1220,15 @@ impl WindowsWindowInner {
          }
      }
  
@@ -4447,7 +4439,7 @@ index 996fcdb7..4464c816 100644
  
          let events = self
              .state
-@@ -813,6 +1252,7 @@ impl WindowsWindowInner {
+@@ -813,6 +1244,7 @@ impl WindowsWindowInner {
  
          if !activated {
              this.state.cursor_visible.store(true, Ordering::Relaxed);
@@ -4455,7 +4447,7 @@ index 996fcdb7..4464c816 100644
          }
  
          // When the window is activated (gains focus), reset the modifier tracking state.
-@@ -863,7 +1303,7 @@ impl WindowsWindowInner {
+@@ -863,7 +1295,7 @@ impl WindowsWindowInner {
      }
  
      fn handle_create_msg(&self, handle: HWND) -> Option<isize> {
@@ -4464,7 +4456,7 @@ index 996fcdb7..4464c816 100644
              notify_frame_changed(handle);
              Some(0)
          } else {
-@@ -966,7 +1406,26 @@ impl WindowsWindowInner {
+@@ -966,7 +1398,26 @@ impl WindowsWindowInner {
  
      fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
          if self.state.is_fullscreen() {
@@ -4492,7 +4484,7 @@ index 996fcdb7..4464c816 100644
          }
  
          let callback = self.state.callbacks.hit_test_window_control.take();
-@@ -980,10 +1439,10 @@ impl WindowsWindowInner {
+@@ -980,10 +1431,10 @@ impl WindowsWindowInner {
                  WindowControlArea::Drag if self.is_movable => Some(HTCAPTION as _),
                  WindowControlArea::Drag => None,
                  WindowControlArea::Close => Some(HTCLOSE as _),
@@ -4505,7 +4497,7 @@ index 996fcdb7..4464c816 100644
                  WindowControlArea::Min if self.is_movable => Some(HTCAPTION as _),
                  WindowControlArea::Min => Some(HTNOWHERE as _),
              })
-@@ -991,6 +1450,10 @@ impl WindowsWindowInner {
+@@ -991,6 +1442,10 @@ impl WindowsWindowInner {
              None
          };
  
@@ -4516,7 +4508,7 @@ index 996fcdb7..4464c816 100644
          if !self.hide_title_bar {
              // If the OS draws the title bar, we don't need to handle hit test messages.
              return drag_area;
-@@ -1007,7 +1470,7 @@ impl WindowsWindowInner {
+@@ -1007,7 +1462,7 @@ impl WindowsWindowInner {
          };
  
          unsafe { ScreenToClient(handle, &mut cursor_point).ok().log_err() };
@@ -4525,7 +4517,7 @@ index 996fcdb7..4464c816 100644
              && !self.state.is_maximized()
              && 0 <= cursor_point.y
              && cursor_point.y <= frame_y
-@@ -1137,12 +1600,12 @@ impl WindowsWindowInner {
+@@ -1137,12 +1592,12 @@ impl WindowsWindowInner {
              && let Some(last_pressed) = last_pressed
          {
              let handled = match (wparam.0 as u32, last_pressed) {
@@ -4540,7 +4532,7 @@ index 996fcdb7..4464c816 100644
                      if self.state.is_maximized() {
                          unsafe { ShowWindowAsync(handle, SW_NORMAL).ok().log_err() };
                      } else {
-@@ -1257,6 +1720,12 @@ impl WindowsWindowInner {
+@@ -1257,6 +1712,12 @@ impl WindowsWindowInner {
      }
  
      fn handle_input_language_changed(&self) -> Option<isize> {
@@ -4553,7 +4545,7 @@ index 996fcdb7..4464c816 100644
          unsafe {
              PostMessageW(
                  Some(self.platform_window_handle),
-@@ -1404,38 +1873,6 @@ impl WindowsWindowInner {
+@@ -1404,38 +1865,6 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -4592,7 +4584,7 @@ index 996fcdb7..4464c816 100644
      /// Clear the hidden flag and restore the cursor immediately
      fn restore_cursor_after_hide(&self) {
          if !self.state.cursor_visible.swap(true, Ordering::Relaxed) {
-@@ -1525,7 +1962,7 @@ fn handle_key_event<F>(
+@@ -1525,7 +1954,7 @@ fn handle_key_event<F>(
      lparam: LPARAM,
      state: &WindowsWindowState,
      f: F,
@@ -4601,7 +4593,7 @@ index 996fcdb7..4464c816 100644
  where
      F: FnOnce(Keystroke, bool, KeyEventMetadata) -> PlatformInput,
  {
-@@ -1542,12 +1979,15 @@ where
+@@ -1542,12 +1971,15 @@ where
                  return None;
              }
              state.last_reported_modifiers.set(Some(modifiers));
@@ -4622,7 +4614,7 @@ index 996fcdb7..4464c816 100644
          VK_CAPITAL => {
              let capslock = current_capslock();
              if state
-@@ -1558,10 +1998,13 @@ where
+@@ -1558,10 +1990,13 @@ where
                  return None;
              }
              state.last_reported_capslock.set(Some(capslock));
@@ -4640,7 +4632,7 @@ index 996fcdb7..4464c816 100644
          }
          vkey => {
              // Keep native layout facts separate from shortcut normalization.
-@@ -1580,8 +2023,12 @@ where
+@@ -1580,8 +2015,12 @@ where
                  caps_lock: current_capslock().on,
                  num_lock: unsafe { GetKeyState(VK_NUMLOCK.0 as i32) & 1 } != 0,
              };
@@ -4655,7 +4647,7 @@ index 996fcdb7..4464c816 100644
          }
      }
  }
-@@ -1641,8 +2088,8 @@ fn parse_normal_key(
+@@ -1641,8 +2080,8 @@ fn parse_normal_key(
      vkey: VIRTUAL_KEY,
      lparam: LPARAM,
      mut modifiers: Modifiers,
@@ -4666,7 +4658,7 @@ index 996fcdb7..4464c816 100644
  
      let key = parse_immutable(vkey).or_else(|| {
          let scan_code = lparam.hiword() & 0xFF;
-@@ -1656,14 +2103,15 @@ fn parse_normal_key(
+@@ -1656,14 +2095,15 @@ fn parse_normal_key(
              key_char,
          },
          prefer_character_input,
@@ -4684,7 +4676,7 @@ index 996fcdb7..4464c816 100644
          }
      }
  
-@@ -1679,7 +2127,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
+@@ -1679,7 +2119,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
      };
  
      if result_c == 0 {
@@ -4693,7 +4685,7 @@ index 996fcdb7..4464c816 100644
      }
  
      let c = &buffer_c[..result_c.unsigned_abs() as usize];
-@@ -1688,11 +2136,11 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
+@@ -1688,11 +2128,11 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
          .filter(|s| !s.is_empty() && !s.chars().next().unwrap().is_control());
  
      if result_c < 0 {
@@ -4707,7 +4699,7 @@ index 996fcdb7..4464c816 100644
      }
  
      // Workaround for some bug that makes the compiler think keyboard_state is still zeroed out
-@@ -1704,7 +2152,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
+@@ -1704,7 +2144,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
  
      let has_modifiers = ctrl_down || alt_down || win_down;
      if !has_modifiers {
@@ -4716,7 +4708,7 @@ index 996fcdb7..4464c816 100644
      }
  
      let mut state_no_modifiers = keyboard_state;
-@@ -1732,6 +2180,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
+@@ -1732,6 +2172,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
      (
          key_char,
          result_c != result_c_no_modifiers || c != c_no_modifiers,
@@ -4724,7 +4716,7 @@ index 996fcdb7..4464c816 100644
      )
  }
  
-@@ -1875,3 +2324,98 @@ mod physical_key_tests {
+@@ -1875,3 +2316,98 @@ mod physical_key_tests {
          assert_eq!(physical_key_from_lparam(LPARAM(0)), None);
      }
  }
@@ -6125,10 +6117,10 @@ index 00000000..aaa65f6c
 +}
 diff --git a/crates/gpui_windows/src/native_resize.rs b/crates/gpui_windows/src/native_resize.rs
 new file mode 100644
-index 00000000..8a4277c6
+index 00000000..7b08bd28
 --- /dev/null
 +++ b/crates/gpui_windows/src/native_resize.rs
-@@ -0,0 +1,217 @@
+@@ -0,0 +1,259 @@
 +//! Bounded conversion between logical client sizes and native sizing rectangles.
 +use gpui::{NativeResizeConstraint, Pixels, Size, px, size};
 +
@@ -6160,6 +6152,31 @@ index 00000000..8a4277c6
 +}
 +
 +impl Geometry {
++    /// The limits describe the restored window. A client-decorated window has
++    /// no native chrome then; only while maximized is its client clipped
++    /// inside the outer frame.
++    pub(crate) fn measure(
++        outer: [i32; 4],
++        client: [i32; 2],
++        client_decorated: bool,
++        dpi: u32,
++    ) -> Option<Self> {
++        let chrome = if client_decorated {
++            [0, 0]
++        } else {
++            let [width, height] = extent(outer)?;
++            [
++                width.checked_sub(client[0])?,
++                height.checked_sub(client[1])?,
++            ]
++        };
++        Some(Self {
++            current: outer,
++            chrome,
++            dpi,
++        })
++    }
++
 +    fn scale(self) -> Option<f64> {
 +        (self.dpi > 0 && self.chrome.iter().all(|n| (0..MAX_EXTENT).contains(n)))
 +            .then_some(self.dpi as f64 / 96.)
@@ -6294,6 +6311,23 @@ index 00000000..8a4277c6
 +            assert_eq!(logical[0] % 20., 0.);
 +            assert_eq!(logical[1] % 20., 0.);
 +        }
++    }
++
++    #[test]
++    fn a_maximized_client_decorated_window_restores_to_its_minimum() {
++        let minimum = size(px(360.), px(616.));
++        let policy = NativeResizeConstraint::Constrained {
++            minimum,
++            maximum: size(px(4000.), px(4000.)),
++            select: Rc::new(Some),
++        };
++        // At 200 %, maximized: the outer frame overhangs the client by 13 px.
++        let maximized = [-13, -13, 3469, 2085];
++        let client = [3456, 2072];
++        let restored = Geometry::measure(maximized, client, true, 192).unwrap();
++        assert_eq!(restored.limits(&policy).unwrap().0, [720, 1232]);
++        let framed = Geometry::measure(maximized, client, false, 192).unwrap();
++        assert_eq!(framed.limits(&policy).unwrap().0, [746, 1258]);
 +    }
 +
 +    #[test]

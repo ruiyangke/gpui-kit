@@ -1,3 +1,5 @@
 0001-gpui-Preserve-native-keyboard-metadata-for-terminal-.patch
 0002-gpui-Build-GPUI-s-own-tests-in-the-snapshot.patch
 0003-gpui_windows-Window-control-text-input-and-file-drop.patch
+0004-gpui_windows-Drop-a-closed-window-s-activation-repor.patch
+0005-gpui_windows-Keep-the-client-size-across-DPI-changes.patch

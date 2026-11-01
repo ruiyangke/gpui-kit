@@ -1,0 +1,131 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ruiyangke <me@ry.ke>
+Date: Sat, 31 Oct 2026 00:00:02 +0000
+Subject: [PATCH] gpui_windows: Keep the client size across DPI changes
+
+Windows scales a whole window for a new DPI, native frame included, so the
+client drifts from its logical size: a native-frame window at 150 % ended a
+couple of points small. Answer WM_GETDPISCALEDSIZE with the client scaled
+exactly plus the frame measured at the new DPI.
+
+Remove when upstream gpui_windows handles WM_GETDPISCALEDSIZE.
+---
+ crates/gpui_windows/src/events.rs        | 41 ++++++++++++++++++++++++
+ crates/gpui_windows/src/native_resize.rs | 40 +++++++++++++++++++++++
+ 2 files changed, 81 insertions(+)
+
+diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
+index 3e4d364e..ac052f25 100644
+--- a/crates/gpui_windows/src/events.rs
++++ b/crates/gpui_windows/src/events.rs
+@@ -245,6 +245,7 @@ impl WindowsWindowInner {
+             }
+             WM_TIMER => self.handle_timer_msg(handle, wparam),
+             WM_NCCALCSIZE => self.handle_calc_client_size(handle, wparam, lparam),
++            WM_GETDPISCALEDSIZE => self.handle_get_dpi_scaled_size_msg(handle, wparam, lparam),
+             WM_DPICHANGED => self.handle_dpi_changed_msg(handle, wparam, lparam),
+             WM_DISPLAYCHANGE => self.handle_display_change_msg(handle),
+             WM_NCHITTEST => self.handle_hit_test_msg(handle, lparam),
+@@ -1303,6 +1304,46 @@ impl WindowsWindowInner {
+         }
+     }
+ 
++    /// Windows scales the whole window for a new DPI, native frame included,
++    /// so the client drifts from its logical size. Propose the client scaled
++    /// exactly, plus the frame as it measures at the new DPI.
++    fn handle_get_dpi_scaled_size_msg(
++        &self,
++        handle: HWND,
++        wparam: WPARAM,
++        lparam: LPARAM,
++    ) -> Option<isize> {
++        if self.state.is_maximized()
++            || self.state.is_fullscreen()
++            || unsafe { IsIconic(handle) }.as_bool()
++        {
++            return None;
++        }
++        let mut client = RECT::default();
++        unsafe { GetClientRect(handle, &mut client) }.ok()?;
++        let dpi = wparam.0 as u32;
++        let chrome = if self.state.decorations.get() == WindowDecorations::Client {
++            [0, 0]
++        } else {
++            let mut frame = RECT::default();
++            let style = WINDOW_STYLE(unsafe { get_window_long(handle, GWL_STYLE) } as u32);
++            let extended = WINDOW_EX_STYLE(unsafe { get_window_long(handle, GWL_EXSTYLE) } as u32);
++            unsafe { AdjustWindowRectExForDpi(&mut frame, style, false, extended, dpi) }.ok()?;
++            [frame.right - frame.left, frame.bottom - frame.top]
++        };
++        let [width, height] = crate::native_resize::dpi_scaled_size(
++            [client.right - client.left, client.bottom - client.top],
++            unsafe { GetDpiForWindow(handle) },
++            dpi,
++            chrome,
++        )?;
++        // SAFETY: WM_GETDPISCALEDSIZE supplies a writable proposed SIZE.
++        let size = unsafe { &mut *(lparam.0 as *mut SIZE) };
++        size.cx = width;
++        size.cy = height;
++        Some(1)
++    }
++
+     fn handle_dpi_changed_msg(
+         &self,
+         handle: HWND,
+diff --git a/crates/gpui_windows/src/native_resize.rs b/crates/gpui_windows/src/native_resize.rs
+index 7b08bd28..07688515 100644
+--- a/crates/gpui_windows/src/native_resize.rs
++++ b/crates/gpui_windows/src/native_resize.rs
+@@ -152,6 +152,32 @@ fn anchor(mut rect: [i32; 4], edge: u32, size: [i32; 2]) -> Option<[i32; 4]> {
+     Some(rect)
+ }
+ 
++/// The outer size that keeps a client's logical size at a new DPI: the
++/// client scaled by the DPI ratio, plus `chrome` measured at the new DPI.
++pub(crate) fn dpi_scaled_size(
++    client: [i32; 2],
++    from: u32,
++    to: u32,
++    chrome: [i32; 2],
++) -> Option<[i32; 2]> {
++    if from == 0 || to == 0 || !chrome.iter().all(|n| (0..MAX_EXTENT).contains(n)) {
++        return None;
++    }
++    let ratio = to as f64 / from as f64;
++    let mut size = [0; 2];
++    for axis in 0..2 {
++        if !(1..=MAX_EXTENT).contains(&client[axis]) {
++            return None;
++        }
++        let scaled = (client[axis] as f64 * ratio).round() as i32;
++        size[axis] = scaled.checked_add(chrome[axis])?;
++        if !(1..=MAX_EXTENT).contains(&size[axis]) {
++            return None;
++        }
++    }
++    Some(size)
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -256,4 +282,18 @@ mod tests {
+                 .is_none()
+         );
+     }
++
++    #[test]
++    fn a_dpi_change_keeps_the_client_size_and_measures_the_frame_anew() {
++        // 200 % to 150 %: an 1800x1200 client becomes 1350x900, plus the
++        // native frame at 144 DPI, not three quarters of the 192 DPI frame.
++        assert_eq!(dpi_scaled_size([1800, 1200], 192, 144, [22, 53]), Some([1372, 953]));
++        // A client-decorated window has no native frame.
++        assert_eq!(dpi_scaled_size([1201, 801], 96, 144, [0, 0]), Some([1802, 1202]));
++        assert_eq!(dpi_scaled_size([800, 600], 144, 144, [16, 39]), Some([816, 639]));
++        assert!(dpi_scaled_size([800, 600], 0, 144, [0, 0]).is_none());
++        assert!(dpi_scaled_size([0, 600], 96, 144, [0, 0]).is_none());
++        assert!(dpi_scaled_size([800, 600], 96, 144, [-1, 0]).is_none());
++        assert!(dpi_scaled_size([MAX_EXTENT, 600], 96, 192, [0, 0]).is_none());
++    }
+ }

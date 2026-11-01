@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ruiyangke <me@ry.ke>
+Date: Sat, 31 Oct 2026 00:00:01 +0000
+Subject: [PATCH] gpui_windows: Drop a closed window's activation report
+
+Hiding or destroying the active window deactivates it after GPUI has removed
+it, and the report then logs "window not found". Take the active-status
+callback on drop, as the visibility callback already is.
+
+Remove when upstream gpui_windows drops it on close.
+---
+ crates/gpui_windows/src/window.rs | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
+index 95e45116..71981062 100644
+--- a/crates/gpui_windows/src/window.rs
++++ b/crates/gpui_windows/src/window.rs
+@@ -851,6 +851,9 @@ impl Drop for WindowsWindow {
+         // `DestroyWindow` below sends `WM_SHOWWINDOW`; without a callback the
+         // resulting visibility report has nothing to notify.
+         self.0.state.callbacks.visibility_change.take();
++        // Hiding or destroying an active window deactivates it after GPUI has
++        // already removed it, and the report would find no window.
++        self.0.state.callbacks.active_status_change.take();
+         // clone this `Rc` to prevent early release of the pointer
+         let this = self.0.clone();
+         self.0
