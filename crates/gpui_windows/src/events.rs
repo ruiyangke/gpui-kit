@@ -571,6 +571,9 @@ impl WindowsWindowInner {
         self.state.closing.set(true);
         self.retire_native_activation();
         let callback = { self.state.callbacks.close.take() };
+        if self.app_id.take().is_some() {
+            crate::app_user_model::set_window_app_id(handle, None).log_err();
+        }
         // Re-enable parent window if this was a modal dialog
         if let Some(parent_hwnd) = self.parent_hwnd {
             unsafe {

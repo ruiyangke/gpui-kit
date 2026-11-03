@@ -1,5 +1,6 @@
 #![cfg(target_os = "windows")]
 
+mod app_user_model;
 mod clipboard;
 mod destination_list;
 mod dialog;

@@ -194,6 +194,8 @@ pub(crate) struct WindowsWindowInner {
     pub(crate) main_receiver: PriorityQueueReceiver<RunnableVariant>,
     pub(crate) platform_window_handle: HWND,
     pub(crate) parent_hwnd: Option<HWND>,
+    /// The AppUserModelID set on the window, removed when it is destroyed.
+    pub(crate) app_id: RefCell<Option<String>>,
 }
 
 impl WindowsWindowState {
@@ -496,7 +498,18 @@ impl WindowsWindowInner {
             platform_window_handle: context.platform_window_handle,
             system_settings: WindowsSystemSettings::new(),
             parent_hwnd: context.parent_hwnd,
+            app_id: RefCell::new(None),
         }))
+    }
+
+    fn set_app_id(&self, app_id: &str) {
+        if self.app_id.borrow().as_deref() == Some(app_id) {
+            return;
+        }
+        match crate::app_user_model::set_window_app_id(self.hwnd, Some(app_id)) {
+            Ok(()) => *self.app_id.borrow_mut() = Some(app_id.to_owned()),
+            Err(error) => log::warn!("failed to set the window's AppUserModelID: {error}"),
+        }
     }
 
     fn toggle_fullscreen(self: &Rc<Self>) {
@@ -789,6 +802,11 @@ impl WindowsWindow {
         if !params.local_file_drop {
             register_drag_drop(&this)?;
             this.ole_drop_registered.set(true);
+        }
+        // Before the window is shown, so the taskbar never lists it under
+        // another app first.
+        if let Some(app_id) = params.app_id.as_deref() {
+            this.set_app_id(app_id);
         }
         set_non_rude_hwnd(hwnd, true);
         configure_dwm_dark_mode(hwnd, appearance);
@@ -1329,6 +1347,10 @@ impl PlatformWindow for WindowsWindow {
         unsafe { SetWindowTextW(self.0.hwnd, &HSTRING::from(title)) }
             .inspect_err(|e| log::error!("Set title failed: {e}"))
             .ok();
+    }
+
+    fn set_app_id(&mut self, app_id: &str) {
+        self.0.set_app_id(app_id);
     }
 
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
