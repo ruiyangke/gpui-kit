@@ -739,7 +739,7 @@ index 00000000..c788a422
 +    if ok { 0 } else { 1 }
 +}
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index e592aa98..15014c2a 100644
+index cfd37c70..db795e7d 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -57,6 +57,39 @@ impl NativeModalLoops {
@@ -804,7 +804,7 @@ index e592aa98..15014c2a 100644
              WM_SETCURSOR => self.handle_set_cursor(handle, lparam),
              WM_SETTINGCHANGE => self.handle_system_settings_changed(handle, wparam, lparam),
              WM_INPUTLANGCHANGE => self.handle_input_language_changed(),
-@@ -618,7 +659,13 @@ impl WindowsWindowInner {
+@@ -638,7 +679,13 @@ impl WindowsWindowInner {
      }
  
      fn handle_char_msg(&self, wparam: WPARAM) -> Option<isize> {
@@ -819,7 +819,7 @@ index e592aa98..15014c2a 100644
          self.with_input_handler(|input_handler| {
              input_handler.replace_text_in_range(None, &input);
          });
-@@ -845,6 +892,9 @@ impl WindowsWindowInner {
+@@ -865,6 +912,9 @@ impl WindowsWindowInner {
          let ime_enabled = self
              .with_input_handler(|input_handler| input_handler.query_accepts_text_input())
              .unwrap_or(false);
@@ -829,7 +829,7 @@ index e592aa98..15014c2a 100644
          if ime_enabled == self.state.ime_enabled.get() {
              return;
          }
-@@ -879,11 +929,7 @@ impl WindowsWindowInner {
+@@ -899,11 +949,7 @@ impl WindowsWindowInner {
      fn handle_ime_composition_inner(&self, ctx: HIMC, lparam: LPARAM) -> Option<isize> {
          let lparam = lparam.0 as u32;
          if lparam == 0 {
@@ -842,7 +842,7 @@ index e592aa98..15014c2a 100644
              Some(0)
          } else {
              if lparam & GCS_RESULTSTR.0 > 0 {
-@@ -922,6 +968,17 @@ impl WindowsWindowInner {
+@@ -942,6 +988,17 @@ impl WindowsWindowInner {
          }
      }
  
@@ -860,7 +860,7 @@ index e592aa98..15014c2a 100644
      fn handle_calc_client_size(
          &self,
          handle: HWND,
-@@ -987,6 +1044,7 @@ impl WindowsWindowInner {
+@@ -1007,6 +1064,7 @@ impl WindowsWindowInner {
  
          if !activated {
              this.state.cursor_visible.store(true, Ordering::Relaxed);
@@ -868,7 +868,7 @@ index e592aa98..15014c2a 100644
          }
  
          // When the window is activated (gains focus), reset the modifier tracking state.
-@@ -1531,6 +1589,7 @@ impl WindowsWindowInner {
+@@ -1553,6 +1611,7 @@ impl WindowsWindowInner {
      }
  
      fn handle_input_language_changed(&self) -> Option<isize> {
@@ -876,7 +876,7 @@ index e592aa98..15014c2a 100644
          unsafe {
              PostMessageW(
                  Some(self.platform_window_handle),
-@@ -1678,38 +1737,6 @@ impl WindowsWindowInner {
+@@ -1700,38 +1759,6 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -915,7 +915,7 @@ index e592aa98..15014c2a 100644
      /// Clear the hidden flag and restore the cursor immediately
      fn restore_cursor_after_hide(&self) {
          if !self.state.cursor_visible.swap(true, Ordering::Relaxed) {
-@@ -1821,7 +1848,7 @@ where
+@@ -1843,7 +1870,7 @@ where
                  capslock: current_capslock(),
              }))
          }
@@ -924,7 +924,7 @@ index e592aa98..15014c2a 100644
          VK_CAPITAL => {
              let capslock = current_capslock();
              if state
-@@ -2152,7 +2179,31 @@ mod physical_key_tests {
+@@ -2174,7 +2201,31 @@ mod physical_key_tests {
  
  #[cfg(test)]
  mod native_window_input_tests {
@@ -957,7 +957,7 @@ index e592aa98..15014c2a 100644
      use windows::Win32::UI::WindowsAndMessaging::{
          MA_ACTIVATE, MA_NOACTIVATE, WM_ENTERMENULOOP, WM_ENTERSIZEMOVE, WM_EXITMENULOOP,
          WM_EXITSIZEMOVE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-@@ -2187,4 +2238,17 @@ mod native_window_input_tests {
+@@ -2209,4 +2260,17 @@ mod native_window_input_tests {
          loops.update(WM_EXITMENULOOP);
          assert!(!loops.active());
      }
@@ -976,7 +976,7 @@ index e592aa98..15014c2a 100644
 +    }
  }
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index ffbf0148..c02e1956 100644
+index 53dea819..db1d02e0 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
 @@ -128,7 +128,7 @@ pub struct WindowsWindowState {

@@ -170,7 +170,7 @@ index 7db34d95..f24758d4 100644
      pub fn zoom_window(&self) {
          self.platform_window.zoom();
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 1f28a644..7dc5d536 100644
+index bb3ad4fc..dbfb2ed7 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -185,7 +185,27 @@ impl WindowsWindowInner {
@@ -607,10 +607,10 @@ index af4caf66..b485a395 100644
  mod native_characters;
  mod native_resize;
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index 13940076..f2191b00 100644
+index 72803e54..7a09c477 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
-@@ -167,8 +167,10 @@ pub struct WindowsWindowState {
+@@ -170,8 +170,10 @@ pub struct WindowsWindowState {
  }
  
  pub(crate) struct WindowsWindowInner {
@@ -621,7 +621,7 @@ index 13940076..f2191b00 100644
      hwnd: HWND,
      pub(crate) dialog_owner: Rc<crate::dialog::DialogOwner>,
      drop_target_helper: IDropTargetHelper,
-@@ -465,8 +467,10 @@ impl WindowsWindowInner {
+@@ -469,8 +471,10 @@ impl WindowsWindowInner {
          )?;
  
          Ok(Rc::new(Self {
@@ -632,7 +632,7 @@ index 13940076..f2191b00 100644
              hwnd,
              dialog_owner: crate::dialog::DialogOwner::new(hwnd),
              drop_target_helper: context.drop_target_helper.clone(),
-@@ -605,6 +609,7 @@ pub(crate) struct Callbacks {
+@@ -609,6 +613,7 @@ pub(crate) struct Callbacks {
  }
  
  struct WindowCreateContext {
@@ -640,7 +640,7 @@ index 13940076..f2191b00 100644
      is_popup: bool,
      mouse_passthrough: bool,
      inner: Option<Result<Rc<WindowsWindowInner>>>,
-@@ -726,6 +731,7 @@ impl WindowsWindow {
+@@ -730,6 +735,7 @@ impl WindowsWindow {
              .contains(WS_POPUP)
              .then(|| initial_bounds.to_device_pixels(display.scale_factor()));
          let mut context = WindowCreateContext {
@@ -648,7 +648,7 @@ index 13940076..f2191b00 100644
              is_popup: popup,
              mouse_passthrough: params.mouse_passthrough,
              inner: None,
-@@ -774,7 +780,10 @@ impl WindowsWindow {
+@@ -778,7 +784,10 @@ impl WindowsWindow {
          let hwnd = creation_result?;
          let this = this.unwrap();
  
@@ -660,7 +660,7 @@ index 13940076..f2191b00 100644
          set_non_rude_hwnd(hwnd, true);
          configure_dwm_dark_mode(hwnd, appearance);
          this.state.border_offset.update(hwnd)?;
-@@ -833,6 +842,7 @@ impl Drop for WindowsWindow {
+@@ -837,6 +846,7 @@ impl Drop for WindowsWindow {
      fn drop(&mut self) {
          self.0.state.native_character_authority.retire();
          self.0.state.closing.set(true);
@@ -668,7 +668,7 @@ index 13940076..f2191b00 100644
          self.0.retire_native_activation();
          self.0.state.resize_constraint.borrow_mut().take();
          self.0.dialog_owner.close();
-@@ -854,7 +864,9 @@ impl Drop for WindowsWindow {
+@@ -858,7 +868,9 @@ impl Drop for WindowsWindow {
                  this.dialog_owner.when_idle().await;
                  let handle = this.hwnd;
                  unsafe {
@@ -679,7 +679,7 @@ index 13940076..f2191b00 100644
                      DestroyWindow(handle).log_err();
                  }
              })
-@@ -972,6 +984,19 @@ impl PlatformWindow for WindowsWindow {
+@@ -976,6 +988,19 @@ impl PlatformWindow for WindowsWindow {
          }
      }
  
@@ -699,7 +699,7 @@ index 13940076..f2191b00 100644
      fn bounds(&self) -> Bounds<Pixels> {
          self.state.bounds()
      }
-@@ -2038,6 +2063,7 @@ unsafe extern "system" fn window_procedure(
+@@ -2042,6 +2067,7 @@ unsafe extern "system" fn window_procedure(
      let inner = unsafe { &*ptr };
      let result = if let Some(inner) = inner.upgrade() {
          if msg == WM_NCDESTROY {

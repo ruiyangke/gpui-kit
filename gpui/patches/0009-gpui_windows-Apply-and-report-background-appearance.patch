@@ -22,7 +22,7 @@ Remove when upstream gpui_windows reports background appearance failures.
  create mode 100644 crates/gpui_windows/src/window_appearance_tests.rs
 
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index 041a58e0..8d11de47 100644
+index 57beed01..b8107ad7 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
 @@ -21,7 +21,8 @@ use windows::{
@@ -35,7 +35,7 @@ index 041a58e0..8d11de47 100644
          },
          UI::{Controls::*, HiDpi::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
      },
-@@ -1215,25 +1216,26 @@ impl PlatformWindow for WindowsWindow {
+@@ -1219,25 +1220,26 @@ impl PlatformWindow for WindowsWindow {
  
          // using Dwm APIs for Mica and MicaAlt backdrops.
          // others follow the set_window_composition_attribute approach
@@ -71,7 +71,7 @@ index 041a58e0..8d11de47 100644
      }
  
      fn minimize(&self) {
-@@ -2067,77 +2069,87 @@ fn retrieve_window_placement(
+@@ -2071,77 +2073,87 @@ fn retrieve_window_placement(
      Ok(placement)
  }
  

@@ -742,7 +742,7 @@ index 00000000..7a8a0bd5
 +    }
 +}
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 15014c2a..1f28a644 100644
+index db795e7d..bb3ad4fc 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -31,6 +31,35 @@ pub(crate) const WM_GPUI_DISPLAYS_CHANGED: u32 = WM_USER + 10;
@@ -792,7 +792,7 @@ index 15014c2a..1f28a644 100644
          let handled = match msg {
              // `DefWindowProc` answers `MA_NOACTIVATE` for a left click on `HTCAPTION`.
              // The activation is only triggered when `DefWindowProc` handles the following `WM_NCLBUTTONDOWN`.
-@@ -588,13 +621,14 @@ impl WindowsWindowInner {
+@@ -608,13 +641,14 @@ impl WindowsWindowInner {
      }
  
      fn handle_syskeyup_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
@@ -814,7 +814,7 @@ index 15014c2a..1f28a644 100644
          let mut func = self.state.callbacks.input.take()?;
  
          func(input);
-@@ -607,7 +641,10 @@ impl WindowsWindowInner {
+@@ -627,7 +661,10 @@ impl WindowsWindowInner {
      // It's a known bug that you can't trigger `ctrl-shift-0`. See:
      // https://superuser.com/questions/1455762/ctrl-shift-number-key-combination-has-stopped-working-for-a-few-numbers
      pub(crate) fn handle_keydown_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
@@ -826,7 +826,7 @@ index 15014c2a..1f28a644 100644
              wparam,
              lparam,
              &self.state,
-@@ -621,22 +658,165 @@ impl WindowsWindowInner {
+@@ -641,22 +678,165 @@ impl WindowsWindowInner {
                  })
              },
          ) else {
@@ -998,7 +998,7 @@ index 15014c2a..1f28a644 100644
              handle_key_event(wparam, lparam, &self.state, |keystroke, _, metadata| {
                  PlatformInput::KeyUp(KeyUpEvent {
                      physical_key: physical_key_from_lparam(lparam),
-@@ -1589,6 +1769,11 @@ impl WindowsWindowInner {
+@@ -1611,6 +1791,11 @@ impl WindowsWindowInner {
      }
  
      fn handle_input_language_changed(&self) -> Option<isize> {
@@ -1010,7 +1010,7 @@ index 15014c2a..1f28a644 100644
          self.state.pending_surrogate.set(None);
          unsafe {
              PostMessageW(
-@@ -1826,7 +2011,7 @@ fn handle_key_event<F>(
+@@ -1848,7 +2033,7 @@ fn handle_key_event<F>(
      lparam: LPARAM,
      state: &WindowsWindowState,
      f: F,
@@ -1019,7 +1019,7 @@ index 15014c2a..1f28a644 100644
  where
      F: FnOnce(Keystroke, bool, KeyEventMetadata) -> PlatformInput,
  {
-@@ -1843,10 +2028,13 @@ where
+@@ -1865,10 +2050,13 @@ where
                  return None;
              }
              state.last_reported_modifiers.set(Some(modifiers));
@@ -1037,7 +1037,7 @@ index 15014c2a..1f28a644 100644
          }
          VK_PACKET | VK_PROCESSKEY => None,
          VK_CAPITAL => {
-@@ -1859,10 +2047,13 @@ where
+@@ -1881,10 +2069,13 @@ where
                  return None;
              }
              state.last_reported_capslock.set(Some(capslock));
@@ -1055,7 +1055,7 @@ index 15014c2a..1f28a644 100644
          }
          vkey => {
              // Keep native layout facts separate from shortcut normalization.
-@@ -1881,8 +2072,12 @@ where
+@@ -1903,8 +2094,12 @@ where
                  caps_lock: current_capslock().on,
                  num_lock: unsafe { GetKeyState(VK_NUMLOCK.0 as i32) & 1 } != 0,
              };
@@ -1070,7 +1070,7 @@ index 15014c2a..1f28a644 100644
          }
      }
  }
-@@ -1942,8 +2137,8 @@ fn parse_normal_key(
+@@ -1964,8 +2159,8 @@ fn parse_normal_key(
      vkey: VIRTUAL_KEY,
      lparam: LPARAM,
      mut modifiers: Modifiers,
@@ -1081,7 +1081,7 @@ index 15014c2a..1f28a644 100644
  
      let key = parse_immutable(vkey).or_else(|| {
          let scan_code = lparam.hiword() & 0xFF;
-@@ -1957,14 +2152,15 @@ fn parse_normal_key(
+@@ -1979,14 +2174,15 @@ fn parse_normal_key(
              key_char,
          },
          prefer_character_input,
@@ -1099,7 +1099,7 @@ index 15014c2a..1f28a644 100644
          }
      }
  
-@@ -1980,7 +2176,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
+@@ -2002,7 +2198,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
      };
  
      if result_c == 0 {
@@ -1108,7 +1108,7 @@ index 15014c2a..1f28a644 100644
      }
  
      let c = &buffer_c[..result_c.unsigned_abs() as usize];
-@@ -1989,11 +2185,11 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
+@@ -2011,11 +2207,11 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
          .filter(|s| !s.is_empty() && !s.chars().next().unwrap().is_control());
  
      if result_c < 0 {
@@ -1122,7 +1122,7 @@ index 15014c2a..1f28a644 100644
      }
  
      // Workaround for some bug that makes the compiler think keyboard_state is still zeroed out
-@@ -2005,7 +2201,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
+@@ -2027,7 +2223,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
  
      let has_modifiers = ctrl_down || alt_down || win_down;
      if !has_modifiers {
@@ -1131,7 +1131,7 @@ index 15014c2a..1f28a644 100644
      }
  
      let mut state_no_modifiers = keyboard_state;
-@@ -2033,6 +2229,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
+@@ -2055,6 +2251,7 @@ fn process_key(vkey: VIRTUAL_KEY, scan_code: u16) -> (Option<String>, bool) {
      (
          key_char,
          result_c != result_c_no_modifiers || c != c_no_modifiers,
@@ -1139,7 +1139,7 @@ index 15014c2a..1f28a644 100644
      )
  }
  
-@@ -2179,7 +2376,10 @@ mod physical_key_tests {
+@@ -2201,7 +2398,10 @@ mod physical_key_tests {
  
  #[cfg(test)]
  mod native_window_input_tests {
@@ -1151,7 +1151,7 @@ index 15014c2a..1f28a644 100644
  
      #[test]
      fn utf16_pairs_cannot_cross_focus_or_text_acceptance_boundaries() {
-@@ -2251,4 +2451,20 @@ mod native_window_input_tests {
+@@ -2273,4 +2473,20 @@ mod native_window_input_tests {
          cancel_marked_text(None, |_| panic!("cancelled committed text"));
          cancel_marked_text(Some(0..0), |_| panic!("cancelled an empty composition"));
      }
@@ -1715,7 +1715,7 @@ index 00000000..fa9d2499
 +    }
 +}
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index c02e1956..13940076 100644
+index db1d02e0..72803e54 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
 @@ -129,6 +129,7 @@ pub struct WindowsWindowState {
@@ -1726,7 +1726,7 @@ index c02e1956..13940076 100644
      pub last_reported_modifiers: Cell<Option<Modifiers>>,
      pub last_reported_capslock: Cell<Option<Capslock>>,
      pub hovered: Cell<bool>,
-@@ -255,6 +256,7 @@ impl WindowsWindowState {
+@@ -258,6 +259,7 @@ impl WindowsWindowState {
              input_handler: Cell::new(input_handler),
              ime_enabled: Cell::new(true),
              pending_surrogate: Cell::new(pending_surrogate),
@@ -1734,7 +1734,7 @@ index c02e1956..13940076 100644
              last_reported_modifiers: Cell::new(last_reported_modifiers),
              last_reported_capslock: Cell::new(last_reported_capslock),
              hovered: Cell::new(hovered),
-@@ -588,6 +590,7 @@ impl WindowsWindowInner {
+@@ -592,6 +594,7 @@ impl WindowsWindowInner {
  pub(crate) struct Callbacks {
      pub(crate) request_frame: Cell<Option<Box<dyn FnMut(RequestFrameOptions)>>>,
      pub(crate) input: Cell<Option<Box<dyn FnMut(PlatformInput) -> DispatchEventResult>>>,
@@ -1742,7 +1742,7 @@ index c02e1956..13940076 100644
      pub(crate) active_status_change: Cell<Option<Box<dyn FnMut(bool)>>>,
      pub(crate) native_activation: RefCell<Option<Rc<dyn Fn(NativeWindowActivation)>>>,
      pub(crate) visibility_change: Cell<Option<Box<dyn FnMut(WindowVisibility)>>>,
-@@ -828,6 +831,7 @@ impl WindowsWindowInner {
+@@ -832,6 +835,7 @@ impl WindowsWindowInner {
  
  impl Drop for WindowsWindow {
      fn drop(&mut self) {
@@ -1750,7 +1750,7 @@ index c02e1956..13940076 100644
          self.0.state.closing.set(true);
          self.0.retire_native_activation();
          self.0.state.resize_constraint.borrow_mut().take();
-@@ -1543,6 +1547,10 @@ impl PlatformWindow for WindowsWindow {
+@@ -1547,6 +1551,10 @@ impl PlatformWindow for WindowsWindow {
          self.state.callbacks.input.set(Some(callback));
      }
  

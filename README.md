@@ -46,15 +46,16 @@ GPUI Kit depends on `gpui-pre`, GPUI Kit's snapshot of Zed's GPUI crates. Its ba
 | 0004 dpi | Keeps a window's client size across DPI changes (`WM_GETDPISCALEDSIZE`) | Remote apps on Windows; mixed-DPI monitors |
 | 0005 untrack | Takes a window off the vsync list while it is destroyed, before a redraw can reach the dead handle ("Invalid window handle") | Remote apps on Windows |
 | 0006 present | Presents the last frame again when a macOS window is shown or AppKit asks for its layer, after macOS discarded the contents of the hidden window | Idle windows, including Remote apps, going transparent on the Mac |
-| 0007 window control | Windows: move, resize and window menu for app-drawn title bars; client decorations; resizable, minimizable, maximizable and maximized at runtime; a native resize constraint | Linux apps that draw their own title bars |
-| 0008 appearance | Windows: background appearance applies, and failures are logged | Transparent remote menus and tooltips |
-| 0009 popups | Windows: popups open at their requested bounds; mouse passthrough; a native activation handler inside `WM_ACTIVATE` | Remote menus and tooltips; focus shared between remote windows |
-| 0010 utf16 | Windows: surrogate pairs and IME cancellation stay with their text target | Remote text input |
-| 0011 characters | Windows: layout characters (dead keys, AltGr) for an opted-in target, without IME | Typing into Linux apps in any keyboard layout |
-| 0012 drop | Windows: file drops through `WM_DROPFILES`, delivered after native dispatch | Dropping files from Explorer onto Linux apps |
-| 0013 drag | Windows: keeps a left-button press for a later outgoing drag | Dragging from Linux apps to Windows |
+| 0007 leave | Windows: the pointer leaving a window emits `MouseExited`, so `on_mouse_exit` runs | Linux apps learning the pointer left their window |
+| 0008 window control | Windows: move, resize and window menu for app-drawn title bars; client decorations; resizable, minimizable, maximizable and maximized at runtime; a native resize constraint | Linux apps that draw their own title bars |
+| 0009 appearance | Windows: background appearance applies, and failures are logged | Transparent remote menus and tooltips |
+| 0010 popups | Windows: popups open at their requested bounds; mouse passthrough; a native activation handler inside `WM_ACTIVATE` | Remote menus and tooltips; focus shared between remote windows |
+| 0011 utf16 | Windows: surrogate pairs and IME cancellation stay with their text target | Remote text input |
+| 0012 characters | Windows: layout characters (dead keys, AltGr) for an opted-in target, without IME | Typing into Linux apps in any keyboard layout |
+| 0013 drop | Windows: file drops through `WM_DROPFILES`, delivered after native dispatch | Dropping files from Explorer onto Linux apps |
+| 0014 drag | Windows: keeps a left-button press for a later outgoing drag | Dragging from Linux apps to Windows |
 
-0003 to 0006 are fixes that apply without the features after them; 0007 can go upstream on its own.
+0003 to 0007 are fixes that apply without the features after them; 0008 can go upstream on its own.
 
 To move to a newer snapshot, stage it with the generator, commit it as a root commit and tag it `gpui-pre-v<version>`, then follow "Move to a new release" with `gpui` before the tag, and update the pin in 0001.
 

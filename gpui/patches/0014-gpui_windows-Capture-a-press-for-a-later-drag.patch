@@ -162,7 +162,7 @@ index f24758d4..f8f41c44 100644
      pub fn zoom_window(&self) {
          self.platform_window.zoom();
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 7dc5d536..3ce94ffb 100644
+index dbfb2ed7..1a77c983 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -181,6 +181,7 @@ impl WindowsWindowInner {
@@ -173,7 +173,7 @@ index 7dc5d536..3ce94ffb 100644
          // Native focus may leave and return before GPUI's deferred observers run.
          self.state
              .native_character_authority
-@@ -897,6 +898,8 @@ impl WindowsWindowInner {
+@@ -917,6 +918,8 @@ impl WindowsWindowInner {
              click_count,
              first_mouse: false,
          });
@@ -556,10 +556,10 @@ index 00000000..aaa65f6c
 +    }
 +}
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index f2191b00..593a55a6 100644
+index 7a09c477..75f54231 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
-@@ -168,6 +168,7 @@ pub struct WindowsWindowState {
+@@ -171,6 +171,7 @@ pub struct WindowsWindowState {
  
  pub(crate) struct WindowsWindowInner {
      pub(crate) local_file_drop: crate::file_drop::LocalFileDrop,
@@ -567,7 +567,7 @@ index f2191b00..593a55a6 100644
      is_popup: bool,
      pub(crate) mouse_passthrough: Cell<bool>,
      ole_drop_registered: Cell<bool>,
-@@ -468,6 +469,7 @@ impl WindowsWindowInner {
+@@ -472,6 +473,7 @@ impl WindowsWindowInner {
  
          Ok(Rc::new(Self {
              local_file_drop: crate::file_drop::LocalFileDrop::new(context.local_file_drop),
@@ -575,7 +575,7 @@ index f2191b00..593a55a6 100644
              is_popup: context.is_popup,
              mouse_passthrough: Cell::new(context.mouse_passthrough),
              ole_drop_registered: Cell::new(false),
-@@ -840,6 +842,7 @@ impl WindowsWindowInner {
+@@ -844,6 +846,7 @@ impl WindowsWindowInner {
  
  impl Drop for WindowsWindow {
      fn drop(&mut self) {
@@ -583,7 +583,7 @@ index f2191b00..593a55a6 100644
          self.0.state.native_character_authority.retire();
          self.0.state.closing.set(true);
          self.0.local_file_drop.retire(self.0.hwnd);
-@@ -997,6 +1000,9 @@ impl PlatformWindow for WindowsWindow {
+@@ -1001,6 +1004,9 @@ impl PlatformWindow for WindowsWindow {
              .local_file_drop
              .enable(self.0.hwnd, enabled && !self.0.state.closing.get());
      }

@@ -434,7 +434,7 @@ index 00000000..1a5ffa96
 +    }
 +}
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 5709e3cd..6f761b24 100644
+index 15a78769..606ef4f1 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -31,6 +31,32 @@ pub(crate) const WM_GPUI_DISPLAYS_CHANGED: u32 = WM_USER + 10;
@@ -614,7 +614,7 @@ index 5709e3cd..6f761b24 100644
          let callback = { self.state.callbacks.close.take() };
          // Re-enable parent window if this was a modal dialog
          if let Some(parent_hwnd) = self.parent_hwnd {
-@@ -782,6 +914,24 @@ impl WindowsWindowInner {
+@@ -802,6 +934,24 @@ impl WindowsWindowInner {
          wparam: WPARAM,
          lparam: LPARAM,
      ) -> Option<isize> {
@@ -639,7 +639,7 @@ index 5709e3cd..6f761b24 100644
          if !self.hide_title_bar || self.state.is_fullscreen() || wparam.0 == 0 {
              return None;
          }
-@@ -866,7 +1016,7 @@ impl WindowsWindowInner {
+@@ -886,7 +1036,7 @@ impl WindowsWindowInner {
      }
  
      fn handle_create_msg(&self, handle: HWND) -> Option<isize> {
@@ -648,7 +648,7 @@ index 5709e3cd..6f761b24 100644
              notify_frame_changed(handle);
              Some(0)
          } else {
-@@ -896,14 +1046,18 @@ impl WindowsWindowInner {
+@@ -916,14 +1066,18 @@ impl WindowsWindowInner {
          unsafe { GetClientRect(handle, &mut client) }.ok()?;
          let from = unsafe { GetDpiForWindow(handle) };
          let dpi = wparam.0 as u32;
@@ -675,7 +675,7 @@ index 5709e3cd..6f761b24 100644
          let [width, height] = crate::native_resize::dpi_scaled_size(
              [client.right - client.left, client.bottom - client.top],
              from,
-@@ -1042,7 +1196,26 @@ impl WindowsWindowInner {
+@@ -1062,7 +1216,26 @@ impl WindowsWindowInner {
  
      fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
          if self.state.is_fullscreen() {
@@ -703,7 +703,7 @@ index 5709e3cd..6f761b24 100644
          }
  
          let callback = self.state.callbacks.hit_test_window_control.take();
-@@ -1056,10 +1229,10 @@ impl WindowsWindowInner {
+@@ -1076,10 +1249,10 @@ impl WindowsWindowInner {
                  WindowControlArea::Drag if self.is_movable => Some(HTCAPTION as _),
                  WindowControlArea::Drag => None,
                  WindowControlArea::Close => Some(HTCLOSE as _),
@@ -716,7 +716,7 @@ index 5709e3cd..6f761b24 100644
                  WindowControlArea::Min if self.is_movable => Some(HTCAPTION as _),
                  WindowControlArea::Min => Some(HTNOWHERE as _),
              })
-@@ -1067,6 +1240,10 @@ impl WindowsWindowInner {
+@@ -1087,6 +1260,10 @@ impl WindowsWindowInner {
              None
          };
  
@@ -727,7 +727,7 @@ index 5709e3cd..6f761b24 100644
          if !self.hide_title_bar {
              // If the OS draws the title bar, we don't need to handle hit test messages.
              return drag_area;
-@@ -1083,7 +1260,7 @@ impl WindowsWindowInner {
+@@ -1103,7 +1280,7 @@ impl WindowsWindowInner {
          };
  
          unsafe { ScreenToClient(handle, &mut cursor_point).ok().log_err() };
@@ -736,7 +736,7 @@ index 5709e3cd..6f761b24 100644
              && !self.state.is_maximized()
              && 0 <= cursor_point.y
              && cursor_point.y <= frame_y
-@@ -1213,12 +1390,12 @@ impl WindowsWindowInner {
+@@ -1235,12 +1412,12 @@ impl WindowsWindowInner {
              && let Some(last_pressed) = last_pressed
          {
              let handled = match (wparam.0 as u32, last_pressed) {
@@ -751,7 +751,7 @@ index 5709e3cd..6f761b24 100644
                      if self.state.is_maximized() {
                          unsafe { ShowWindowAsync(handle, SW_NORMAL).ok().log_err() };
                      } else {
-@@ -1951,3 +2128,29 @@ mod physical_key_tests {
+@@ -1973,3 +2150,29 @@ mod physical_key_tests {
          assert_eq!(physical_key_from_lparam(LPARAM(0)), None);
      }
  }
@@ -1052,7 +1052,7 @@ index 94f70769..47a35299 100644
      #[test]
      fn a_dpi_change_keeps_the_client_size_and_measures_the_frame_anew() {
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index 2f1240c0..041a58e0 100644
+index 06e5f4f5..57beed01 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
 @@ -32,8 +32,76 @@ use crate::direct_manipulation::DirectManipulationHandler;
@@ -1145,16 +1145,16 @@ index 2f1240c0..041a58e0 100644
      pub scale_factor: Cell<f32>,
      pub restore_from_minimized: Cell<Option<Box<dyn FnMut(RequestFrameOptions)>>>,
  
-@@ -61,6 +131,8 @@ pub struct WindowsWindowState {
-     pub last_reported_modifiers: Cell<Option<Modifiers>>,
-     pub last_reported_capslock: Cell<Option<Capslock>>,
-     pub hovered: Cell<bool>,
+@@ -64,6 +134,8 @@ pub struct WindowsWindowState {
+     /// The pointer's last position in the window and the button it moved
+     /// with, for the exit when it leaves.
+     pub last_pointer: Cell<(Point<Pixels>, Option<MouseButton>)>,
 +    pub(crate) modal_loops: Cell<NativeModalLoops>,
 +    pub(crate) closing: Cell<bool>,
      pub last_visibility: Cell<Option<WindowVisibility>>,
      pub direct_manipulation: DirectManipulationHandler,
  
-@@ -100,9 +172,12 @@ pub(crate) struct WindowsWindowInner {
+@@ -103,9 +175,12 @@ pub(crate) struct WindowsWindowInner {
      system_settings: WindowsSystemSettings,
      pub(crate) handle: AnyWindowHandle,
      pub(crate) hide_title_bar: bool,
@@ -1169,7 +1169,7 @@ index 2f1240c0..041a58e0 100644
      pub(crate) dpi_resize: Cell<Option<crate::native_resize::DpiResize>>,
      pub(crate) executor: ForegroundExecutor,
      pub(crate) validation_number: usize,
-@@ -116,6 +191,7 @@ impl WindowsWindowState {
+@@ -119,6 +194,7 @@ impl WindowsWindowState {
          hwnd: HWND,
          directx_devices: &DirectXDevices,
          window_params: &CREATESTRUCTW,
@@ -1177,7 +1177,7 @@ index 2f1240c0..041a58e0 100644
          current_cursor: Option<HCURSOR>,
          cursor_visible: Arc<AtomicBool>,
          display: WindowsDisplay,
-@@ -166,9 +242,11 @@ impl WindowsWindowState {
+@@ -169,9 +245,11 @@ impl WindowsWindowState {
              border_offset,
              appearance: Cell::new(appearance),
              background_appearance: Cell::new(WindowBackgroundAppearance::Opaque),
@@ -1189,16 +1189,16 @@ index 2f1240c0..041a58e0 100644
              callbacks,
              frame_signal: Arc::new(PlatformFrameSignal::new()),
              input_handler: Cell::new(input_handler),
-@@ -177,6 +255,8 @@ impl WindowsWindowState {
-             last_reported_modifiers: Cell::new(last_reported_modifiers),
+@@ -181,6 +259,8 @@ impl WindowsWindowState {
              last_reported_capslock: Cell::new(last_reported_capslock),
              hovered: Cell::new(hovered),
+             last_pointer: Cell::new((Point::default(), None)),
 +            modal_loops: Cell::new(NativeModalLoops::default()),
 +            closing: Cell::new(false),
              last_visibility: Cell::new(None),
              renderer: RefCell::new(renderer),
              force_render_pending: Cell::new(false),
-@@ -223,10 +303,19 @@ impl WindowsWindowState {
+@@ -227,10 +307,19 @@ impl WindowsWindowState {
                  .log_err();
              placement
          };
@@ -1219,7 +1219,7 @@ index 2f1240c0..041a58e0 100644
                  self.scale_factor.get(),
              ),
              placement.showCmd == SW_SHOWMAXIMIZED.0 as u32,
-@@ -255,6 +344,92 @@ impl WindowsWindowState {
+@@ -259,6 +348,92 @@ impl WindowsWindowState {
  }
  
  impl WindowsWindowInner {
@@ -1312,7 +1312,7 @@ index 2f1240c0..041a58e0 100644
      /// Whether the window is being presented: shown and not minimized. Windows
      /// has no notification for a window fully covered by other windows, so
      /// that case reports `Visible`.
-@@ -273,6 +448,7 @@ impl WindowsWindowInner {
+@@ -277,6 +452,7 @@ impl WindowsWindowInner {
              hwnd,
              &context.directx_devices,
              cs,
@@ -1320,7 +1320,7 @@ index 2f1240c0..041a58e0 100644
              context.current_cursor,
              context.cursor_visible.clone(),
              context.display,
-@@ -290,9 +466,12 @@ impl WindowsWindowInner {
+@@ -294,9 +470,12 @@ impl WindowsWindowInner {
              state,
              handle: context.handle,
              hide_title_bar: context.hide_title_bar,
@@ -1335,7 +1335,7 @@ index 2f1240c0..041a58e0 100644
              dpi_resize: Cell::new(None),
              executor: context.executor.clone(),
              validation_number: context.validation_number,
-@@ -416,6 +595,7 @@ struct WindowCreateContext {
+@@ -420,6 +599,7 @@ struct WindowCreateContext {
      inner: Option<Result<Rc<WindowsWindowInner>>>,
      handle: AnyWindowHandle,
      hide_title_bar: bool,
@@ -1343,7 +1343,7 @@ index 2f1240c0..041a58e0 100644
      display: WindowsDisplay,
      is_movable: bool,
      is_resizable: bool,
-@@ -491,27 +671,12 @@ impl WindowsWindow {
+@@ -495,27 +675,12 @@ impl WindowsWindow {
                  .unwrap_or(""),
          );
  
@@ -1377,7 +1377,7 @@ index 2f1240c0..041a58e0 100644
          if !disable_direct_composition {
              dwexstyle |= WS_EX_NOREDIRECTIONBITMAP;
          }
-@@ -529,6 +694,7 @@ impl WindowsWindow {
+@@ -533,6 +698,7 @@ impl WindowsWindow {
              inner: None,
              handle,
              hide_title_bar,
@@ -1385,7 +1385,7 @@ index 2f1240c0..041a58e0 100644
              display,
              is_movable: params.is_movable,
              is_resizable: params.is_resizable,
-@@ -575,13 +741,12 @@ impl WindowsWindow {
+@@ -579,13 +745,12 @@ impl WindowsWindow {
          set_non_rude_hwnd(hwnd, true);
          configure_dwm_dark_mode(hwnd, appearance);
          this.state.border_offset.update(hwnd)?;
@@ -1403,7 +1403,7 @@ index 2f1240c0..041a58e0 100644
              unsafe { SetWindowPlacement(hwnd, &placement)? };
          } else {
              this.state.initial_placement.set(Some(WindowOpenStatus {
-@@ -612,6 +777,8 @@ impl rwh::HasDisplayHandle for WindowsWindow {
+@@ -616,6 +781,8 @@ impl rwh::HasDisplayHandle for WindowsWindow {
  
  impl Drop for WindowsWindow {
      fn drop(&mut self) {
@@ -1412,7 +1412,7 @@ index 2f1240c0..041a58e0 100644
          self.0.dialog_owner.close();
          unsafe { ShowWindowAsync(self.0.hwnd, SW_HIDE).ok().log_err() };
          // `DestroyWindow` below sends `WM_SHOWWINDOW`; without a callback the
-@@ -640,6 +807,107 @@ impl Drop for WindowsWindow {
+@@ -644,6 +811,107 @@ impl Drop for WindowsWindow {
  }
  
  impl PlatformWindow for WindowsWindow {
@@ -1520,7 +1520,7 @@ index 2f1240c0..041a58e0 100644
      fn bounds(&self) -> Bounds<Pixels> {
          self.state.bounds()
      }
-@@ -661,22 +929,38 @@ impl PlatformWindow for WindowsWindow {
+@@ -665,22 +933,38 @@ impl PlatformWindow for WindowsWindow {
      }
  
      fn resize(&mut self, size: Size<Pixels>) {
@@ -1565,7 +1565,7 @@ index 2f1240c0..041a58e0 100644
                      )
                      .context("unable to set window content size")
                      .log_err();
-@@ -956,12 +1240,189 @@ impl PlatformWindow for WindowsWindow {
+@@ -960,12 +1244,189 @@ impl PlatformWindow for WindowsWindow {
          unsafe { ShowWindowAsync(self.0.hwnd, SW_MINIMIZE).ok().log_err() };
      }
  
@@ -1757,7 +1757,7 @@ index 2f1240c0..041a58e0 100644
                  self.state.initial_placement.set(Some(status));
              }
          }
-@@ -1426,13 +1887,6 @@ struct WindowOpenStatus {
+@@ -1430,13 +1891,6 @@ struct WindowOpenStatus {
      state: WindowOpenState,
  }
  
@@ -1771,7 +1771,7 @@ index 2f1240c0..041a58e0 100644
  const WINDOW_CLASS_NAME: PCWSTR = w!("Zed::Window");
  
  fn register_window_class(icon_handle: HICON) {
-@@ -1697,9 +2151,84 @@ fn set_non_rude_hwnd(hwnd: HWND, non_rude: bool) {
+@@ -1701,9 +2155,84 @@ fn set_non_rude_hwnd(hwnd: HWND, non_rude: bool) {
  
  #[cfg(test)]
  mod tests {

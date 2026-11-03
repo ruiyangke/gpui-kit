@@ -1908,7 +1908,7 @@ index 00000000..465dfc5a
 +    }
 +}
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 6f761b24..e592aa98 100644
+index 606ef4f1..cfd37c70 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -57,6 +57,14 @@ impl NativeModalLoops {
@@ -1953,7 +1953,7 @@ index 6f761b24..e592aa98 100644
          let callback = { self.state.callbacks.close.take() };
          // Re-enable parent window if this was a modal dialog
          if let Some(parent_hwnd) = self.parent_hwnd {
-@@ -949,8 +963,15 @@ impl WindowsWindowInner {
+@@ -969,8 +983,15 @@ impl WindowsWindowInner {
          }
      }
  
@@ -1970,7 +1970,7 @@ index 6f761b24..e592aa98 100644
  
          let events = self
              .state
-@@ -2131,11 +2152,24 @@ mod physical_key_tests {
+@@ -2153,11 +2174,24 @@ mod physical_key_tests {
  
  #[cfg(test)]
  mod native_window_input_tests {
@@ -1998,7 +1998,7 @@ index 6f761b24..e592aa98 100644
      fn nested_menus_do_not_end_an_interactive_resize() {
          let mut loops = NativeModalLoops::default();
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index 8d11de47..ffbf0148 100644
+index b8107ad7..53dea819 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
 @@ -75,7 +75,7 @@ fn initial_window_styles(
@@ -2010,7 +2010,7 @@ index 8d11de47..ffbf0148 100644
      }
      let mut style = window_control_style(WS_SYSMENU, resizable, minimizable, resizable);
      let extended = if kind == WindowKind::Dialog {
-@@ -166,6 +166,8 @@ pub struct WindowsWindowState {
+@@ -169,6 +169,8 @@ pub struct WindowsWindowState {
  }
  
  pub(crate) struct WindowsWindowInner {
@@ -2019,7 +2019,7 @@ index 8d11de47..ffbf0148 100644
      hwnd: HWND,
      pub(crate) dialog_owner: Rc<crate::dialog::DialogOwner>,
      drop_target_helper: IDropTargetHelper,
-@@ -461,6 +463,8 @@ impl WindowsWindowInner {
+@@ -465,6 +467,8 @@ impl WindowsWindowInner {
          )?;
  
          Ok(Rc::new(Self {
@@ -2028,7 +2028,7 @@ index 8d11de47..ffbf0148 100644
              hwnd,
              dialog_owner: crate::dialog::DialogOwner::new(hwnd),
              drop_target_helper: context.drop_target_helper.clone(),
-@@ -546,6 +550,10 @@ impl WindowsWindowInner {
+@@ -550,6 +554,10 @@ impl WindowsWindowInner {
              .detach();
      }
  
@@ -2039,7 +2039,7 @@ index 8d11de47..ffbf0148 100644
      fn set_window_placement(self: &Rc<Self>) -> Result<()> {
          let Some(open_status) = self.state.initial_placement.take() else {
              return Ok(());
-@@ -581,6 +589,7 @@ pub(crate) struct Callbacks {
+@@ -585,6 +593,7 @@ pub(crate) struct Callbacks {
      pub(crate) request_frame: Cell<Option<Box<dyn FnMut(RequestFrameOptions)>>>,
      pub(crate) input: Cell<Option<Box<dyn FnMut(PlatformInput) -> DispatchEventResult>>>,
      pub(crate) active_status_change: Cell<Option<Box<dyn FnMut(bool)>>>,
@@ -2047,7 +2047,7 @@ index 8d11de47..ffbf0148 100644
      pub(crate) visibility_change: Cell<Option<Box<dyn FnMut(WindowVisibility)>>>,
      pub(crate) hovered_status_change: Cell<Option<Box<dyn FnMut(bool)>>>,
      pub(crate) resize: Cell<Option<Box<dyn FnMut(Size<Pixels>, f32)>>>,
-@@ -593,6 +602,8 @@ pub(crate) struct Callbacks {
+@@ -597,6 +606,8 @@ pub(crate) struct Callbacks {
  }
  
  struct WindowCreateContext {
@@ -2056,7 +2056,7 @@ index 8d11de47..ffbf0148 100644
      inner: Option<Result<Rc<WindowsWindowInner>>>,
      handle: AnyWindowHandle,
      hide_title_bar: bool,
-@@ -672,6 +683,10 @@ impl WindowsWindow {
+@@ -676,6 +687,10 @@ impl WindowsWindow {
                  .unwrap_or(""),
          );
  
@@ -2067,7 +2067,7 @@ index 8d11de47..ffbf0148 100644
          let (mut dwexstyle, dwstyle) = initial_window_styles(
              params.kind,
              hide_title_bar,
-@@ -681,6 +696,9 @@ impl WindowsWindow {
+@@ -685,6 +700,9 @@ impl WindowsWindow {
          if !disable_direct_composition {
              dwexstyle |= WS_EX_NOREDIRECTIONBITMAP;
          }
@@ -2077,7 +2077,7 @@ index 8d11de47..ffbf0148 100644
  
          let hinstance = get_module_handle();
          let display = if let Some(display_id) = params.display_id {
-@@ -691,7 +709,22 @@ impl WindowsWindow {
+@@ -695,7 +713,22 @@ impl WindowsWindow {
          .or_else(WindowsDisplay::primary_monitor)
          .context("failed to find any monitor")?;
          let appearance = system_appearance().unwrap_or_default();
@@ -2100,7 +2100,7 @@ index 8d11de47..ffbf0148 100644
              inner: None,
              handle,
              hide_title_bar,
-@@ -721,10 +754,10 @@ impl WindowsWindow {
+@@ -725,10 +758,10 @@ impl WindowsWindow {
                  WINDOW_CLASS_NAME,
                  &window_name,
                  dwstyle,
@@ -2115,7 +2115,7 @@ index 8d11de47..ffbf0148 100644
                  parent_hwnd,
                  None,
                  Some(hinstance.into()),
-@@ -743,10 +776,11 @@ impl WindowsWindow {
+@@ -747,10 +780,11 @@ impl WindowsWindow {
          configure_dwm_dark_mode(hwnd, appearance);
          this.state.border_offset.update(hwnd)?;
          let mut placement =
@@ -2129,7 +2129,7 @@ index 8d11de47..ffbf0148 100644
          if params.show {
              unsafe { SetWindowPlacement(hwnd, &placement)? };
          } else {
-@@ -776,9 +810,26 @@ impl rwh::HasDisplayHandle for WindowsWindow {
+@@ -780,9 +814,26 @@ impl rwh::HasDisplayHandle for WindowsWindow {
      }
  }
  
@@ -2156,7 +2156,7 @@ index 8d11de47..ffbf0148 100644
          self.0.state.resize_constraint.borrow_mut().take();
          self.0.dialog_owner.close();
          unsafe { ShowWindowAsync(self.0.hwnd, SW_HIDE).ok().log_err() };
-@@ -909,6 +960,14 @@ impl PlatformWindow for WindowsWindow {
+@@ -913,6 +964,14 @@ impl PlatformWindow for WindowsWindow {
              .detach();
      }
  
@@ -2171,7 +2171,7 @@ index 8d11de47..ffbf0148 100644
      fn bounds(&self) -> Bounds<Pixels> {
          self.state.bounds()
      }
-@@ -1110,22 +1169,42 @@ impl PlatformWindow for WindowsWindow {
+@@ -1114,22 +1173,42 @@ impl PlatformWindow for WindowsWindow {
      }
  
      fn activate(&self) {
@@ -2216,7 +2216,7 @@ index 8d11de47..ffbf0148 100644
  
                  // premium ragebait by windows, this is needed because the window
                  // must have received an input event to be able to set itself to foreground
-@@ -1155,6 +1234,9 @@ impl PlatformWindow for WindowsWindow {
+@@ -1159,6 +1238,9 @@ impl PlatformWindow for WindowsWindow {
                      },
                  ];
                  unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
@@ -2226,7 +2226,7 @@ index 8d11de47..ffbf0148 100644
  
                  // todo(windows)
                  // crate `windows 0.56` reports true as Err
-@@ -1403,6 +1485,16 @@ impl PlatformWindow for WindowsWindow {
+@@ -1407,6 +1489,16 @@ impl PlatformWindow for WindowsWindow {
              .detach();
      }
  
@@ -2243,7 +2243,7 @@ index 8d11de47..ffbf0148 100644
      fn set_native_resize_constraint(&self, constraint: Option<NativeResizeConstraint>) {
          if !self.state.closing.get() {
              *self.state.resize_constraint.borrow_mut() = constraint;
-@@ -2040,10 +2132,53 @@ fn calculate_client_rect(
+@@ -2044,10 +2136,53 @@ fn calculate_client_rect(
      }
  }
  
@@ -2298,7 +2298,7 @@ index 8d11de47..ffbf0148 100644
      border_offset: &WindowBorderOffset,
  ) -> Result<WINDOWPLACEMENT> {
      let mut placement = WINDOWPLACEMENT {
-@@ -2051,17 +2186,13 @@ fn retrieve_window_placement(
+@@ -2055,17 +2190,13 @@ fn retrieve_window_placement(
          ..Default::default()
      };
      unsafe { GetWindowPlacement(hwnd, &mut placement)? };
@@ -2321,7 +2321,7 @@ index 8d11de47..ffbf0148 100644
      // and would otherwise throw off the physical position (e.g. leaving the window
      // partially off-screen when moved to a monitor with a different scale factor).
      let bounds = bounds.to_device_pixels(display.scale_factor());
-@@ -2177,6 +2308,32 @@ mod tests {
+@@ -2181,6 +2312,32 @@ mod tests {
          assert_eq!(initial_show_command(false), SW_SHOWNOACTIVATE);
      }
  
@@ -2354,7 +2354,7 @@ index 8d11de47..ffbf0148 100644
      #[test]
      fn normal_windows_get_only_the_title_bar_they_requested() {
          let controls = WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX;
-@@ -2190,7 +2347,7 @@ mod tests {
+@@ -2194,7 +2351,7 @@ mod tests {
          );
          assert_eq!(
              initial_window_styles(WindowKind::PopUp, false, true, true),

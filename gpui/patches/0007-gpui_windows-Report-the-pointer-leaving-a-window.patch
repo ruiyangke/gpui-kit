@@ -1,0 +1,110 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ruiyangke <me@ry.ke>
+Date: Tue, 3 Nov 2026 00:00:00 +0000
+Subject: [PATCH] gpui_windows: Report the pointer leaving a window
+
+WM_MOUSELEAVE and WM_NCMOUSELEAVE ended hover tracking but never emitted
+MouseExited, so `on_mouse_exit` listeners never ran on Windows. Mouse
+moves already arm TrackMouseEvent(TME_LEAVE); the leave now dispatches
+MouseExited with the pointer's last position and button and the current
+modifiers. Tracking also ends when the cursor moves between the client
+area and the window's own non-client area, such as an app-drawn title
+bar; the cursor is still over the window then, and no exit is reported.
+A hidden window, a closing one included, reports none either.
+
+Newport needs it for Remote apps on Windows: a Linux app learns that
+the pointer left its window, and clears its hover state and tooltips.
+
+Remove when upstream gpui_windows emits MouseExited.
+---
+ crates/gpui_windows/src/events.rs | 30 ++++++++++++++++++++++++++----
+ crates/gpui_windows/src/window.rs |  4 ++++
+ 2 files changed, 30 insertions(+), 4 deletions(-)
+
+diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
+index 5709e3cd..15a78769 100644
+--- a/crates/gpui_windows/src/events.rs
++++ b/crates/gpui_windows/src/events.rs
+@@ -111,7 +111,7 @@ impl WindowsWindowInner {
+             WM_CLOSE => self.handle_close_msg(),
+             WM_DESTROY => self.handle_destroy_msg(handle),
+             WM_MOUSEMOVE => self.handle_mouse_move_msg(handle, lparam, wparam),
+-            WM_MOUSELEAVE | WM_NCMOUSELEAVE => self.handle_mouse_leave_msg(),
++            WM_MOUSELEAVE | WM_NCMOUSELEAVE => self.handle_mouse_leave_msg(handle),
+             WM_NCMOUSEMOVE => self.handle_nc_mouse_move_msg(handle, lparam),
+             // Treat double click as a second single click, since we track the double clicks ourselves.
+             // If you don't interact with any elements, this will fall through to the windows default
+@@ -373,8 +373,10 @@ impl WindowsWindowInner {
+         };
+         let x = lparam.signed_loword() as f32;
+         let y = lparam.signed_hiword() as f32;
++        let position = logical_point(x, y, scale_factor);
++        self.state.last_pointer.set((position, pressed_button));
+         let input = PlatformInput::MouseMove(MouseMoveEvent {
+-            position: logical_point(x, y, scale_factor),
++            position,
+             pressed_button,
+             modifiers: current_modifiers(),
+         });
+@@ -384,8 +386,26 @@ impl WindowsWindowInner {
+         if handled { Some(0) } else { Some(1) }
+     }
+ 
+-    fn handle_mouse_leave_msg(&self) -> Option<isize> {
++    fn handle_mouse_leave_msg(&self, handle: HWND) -> Option<isize> {
+         self.state.hovered.set(false);
++        // Tracking also ends when the cursor moves between the client area
++        // and this window's own non-client area, such as an app-drawn title
++        // bar; the cursor is still over the window then. A hidden window,
++        // a closing one included, reports nothing: GPUI may have removed it.
++        let mut cursor = POINT::default();
++        let left = unsafe {
++            IsWindowVisible(handle).as_bool()
++                && (GetCursorPos(&mut cursor).is_err() || WindowFromPoint(cursor) != handle)
++        };
++        if left && let Some(mut func) = self.state.callbacks.input.take() {
++            let (position, pressed_button) = self.state.last_pointer.get();
++            func(PlatformInput::MouseExited(MouseExitEvent {
++                position,
++                pressed_button,
++                modifiers: current_modifiers(),
++            }));
++            self.state.callbacks.input.set(Some(func));
++        }
+         // The next window's `WM_SETCURSOR` picks its own cursor, so we just clear
+         // the flag for tight `is_cursor_visible()` semantics.
+         self.state.cursor_visible.store(true, Ordering::Relaxed);
+@@ -1120,8 +1140,10 @@ impl WindowsWindowInner {
+             y: lparam.signed_hiword().into(),
+         };
+         unsafe { ScreenToClient(handle, &mut cursor_point).ok().log_err() };
++        let position = logical_point(cursor_point.x as f32, cursor_point.y as f32, scale_factor);
++        self.state.last_pointer.set((position, None));
+         let input = PlatformInput::MouseMove(MouseMoveEvent {
+-            position: logical_point(cursor_point.x as f32, cursor_point.y as f32, scale_factor),
++            position,
+             pressed_button: None,
+             modifiers: current_modifiers(),
+         });
+diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
+index 2f1240c0..06e5f4f5 100644
+--- a/crates/gpui_windows/src/window.rs
++++ b/crates/gpui_windows/src/window.rs
+@@ -61,6 +61,9 @@ pub struct WindowsWindowState {
+     pub last_reported_modifiers: Cell<Option<Modifiers>>,
+     pub last_reported_capslock: Cell<Option<Capslock>>,
+     pub hovered: Cell<bool>,
++    /// The pointer's last position in the window and the button it moved
++    /// with, for the exit when it leaves.
++    pub last_pointer: Cell<(Point<Pixels>, Option<MouseButton>)>,
+     pub last_visibility: Cell<Option<WindowVisibility>>,
+     pub direct_manipulation: DirectManipulationHandler,
+ 
+@@ -177,6 +180,7 @@ impl WindowsWindowState {
+             last_reported_modifiers: Cell::new(last_reported_modifiers),
+             last_reported_capslock: Cell::new(last_reported_capslock),
+             hovered: Cell::new(hovered),
++            last_pointer: Cell::new((Point::default(), None)),
+             last_visibility: Cell::new(None),
+             renderer: RefCell::new(renderer),
+             force_render_pending: Cell::new(false),
