@@ -1,0 +1,595 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ruiyangke <me@ry.ke>
+Date: Wed, 28 Oct 2026 00:00:07 +0000
+Subject: [PATCH] gpui_windows: Capture a press for a later drag
+
+`Window::capture_native_drag_gesture` keeps the left-button press being
+dispatched, and `NativeDragGesture::claim` later turns it into tracking
+authority after the platform checks that the same press is still held by
+this window. A release, capture loss, deactivation, a new press or the
+window closing invalidates it. Constructed GPUI mouse events cannot
+create one.
+
+Newport needs it for Remote apps on Windows: a Linux app starts a drag
+after its press has been forwarded, and Newport then starts the outgoing
+OLE drag from that press.
+
+capture_native_drag_gesture has a default.
+
+Remove when upstream GPUI can start a native drag from an earlier press.
+---
+ crates/gpui/src/platform.rs             |  10 +
+ crates/gpui/src/platform/native_drag.rs |  72 +++++
+ crates/gpui/src/window.rs               |   8 +
+ crates/gpui_windows/src/events.rs       |   3 +
+ crates/gpui_windows/src/gpui_windows.rs |   1 +
+ crates/gpui_windows/src/native_drag.rs  | 355 ++++++++++++++++++++++++
+ crates/gpui_windows/src/window.rs       |   6 +
+ 7 files changed, 455 insertions(+)
+ create mode 100644 crates/gpui/src/platform/native_drag.rs
+ create mode 100644 crates/gpui_windows/src/native_drag.rs
+
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index 6fb8d2a1..0fc76903 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -2,6 +2,8 @@ mod app_menu;
+ mod keyboard;
+ mod keystroke;
+ mod platform_info;
++#[cfg(windows)]
++mod native_drag;
+ 
+ #[cfg(all(target_os = "linux", feature = "wayland"))]
+ #[expect(missing_docs)]
+@@ -82,6 +84,8 @@ use uuid::Uuid;
+ pub use app_menu::*;
+ pub use keyboard::*;
+ pub use keystroke::*;
++#[cfg(windows)]
++pub use native_drag::{NativeDragGesture, NativeDragTracking};
+ 
+ /// Whether the platform is presenting a window's frames.
+ ///
+@@ -1326,6 +1330,12 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+     #[cfg(windows)]
+     fn set_native_file_drop_enabled(&self, _enabled: bool) {}
+ 
++    /// Capture one genuine Windows left-button press during its native dispatch.
++    #[cfg(windows)]
++    fn capture_native_drag_gesture(&self) -> Option<NativeDragGesture> {
++        None
++    }
++
+     fn scale_factor(&self) -> f32;
+     fn appearance(&self) -> WindowAppearance;
+     fn display(&self) -> Option<Rc<dyn PlatformDisplay>>;
+diff --git a/crates/gpui/src/platform/native_drag.rs b/crates/gpui/src/platform/native_drag.rs
+new file mode 100644
+index 00000000..826ad360
+--- /dev/null
++++ b/crates/gpui/src/platform/native_drag.rs
+@@ -0,0 +1,72 @@
++//! Native Windows drag authority, separate from GPUI's rendered drag payload.
++
++/// A single-use native left-button gesture captured by its source window.
++///
++/// It remains pending while an application prepares a drag. Native release,
++/// capture loss, deactivation, a new press, or source retirement invalidates it.
++/// Constructed GPUI mouse events cannot create this authority.
++pub struct NativeDragGesture {
++    claim: Box<dyn FnOnce() -> Option<NativeDragTracking>>,
++}
++
++impl NativeDragGesture {
++    /// Claim this press after its input dispatch has returned. The platform
++    /// rechecks the live native owner, foreground, capture and held button.
++    ///
++    /// This does not start OLE, release capture, or enter a native modal loop.
++    /// The caller must enter such a loop outside GPUI App/window updates.
++    pub fn claim(self) -> Option<NativeDragTracking> {
++        (self.claim)()
++    }
++
++    /// Construct authority supplied by the native platform implementation.
++    ///
++    /// # Safety
++    /// The closure must consume a single, actual native press; reject expired
++    /// or still-dispatching presses; and recheck native ownership at claim.
++    #[doc(hidden)]
++    pub unsafe fn from_platform(
++        claim: impl FnOnce() -> Option<NativeDragTracking> + 'static,
++    ) -> Self {
++        Self { claim: Box::new(claim) }
++    }
++}
++
++/// Claimed native drag authority owned by the caller's tracking operation.
++///
++/// Capture transfer, button release and target activation are normal during
++/// OLE tracking. They do not revoke this authority; source retirement does.
++/// Remote-session cancellation and native drop-result policy remain the caller's
++/// responsibility. This handle does not keep an HWND alive or delay destruction.
++pub struct NativeDragTracking {
++    current: Box<dyn Fn() -> bool>,
++    finish: Option<Box<dyn FnOnce()>>,
++}
++
++impl NativeDragTracking {
++    /// Whether the native source still permits this tracking operation.
++    pub fn is_current(&self) -> bool {
++        (self.current)()
++    }
++
++    /// Construct a tracking lifetime supplied by the native platform.
++    ///
++    /// # Safety
++    /// `current` must reject source retirement and never revive an expired
++    /// operation. `finish` must release only this operation's ownership.
++    #[doc(hidden)]
++    pub unsafe fn from_platform(
++        current: impl Fn() -> bool + 'static,
++        finish: impl FnOnce() + 'static,
++    ) -> Self {
++        Self { current: Box::new(current), finish: Some(Box::new(finish)) }
++    }
++}
++
++impl Drop for NativeDragTracking {
++    fn drop(&mut self) {
++        if let Some(finish) = self.finish.take() {
++            finish();
++        }
++    }
++}
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index f24758d4..f8f41c44 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -3094,6 +3094,14 @@ impl Window {
+         self.platform_window.set_native_file_drop_enabled(enabled);
+     }
+ 
++    /// Retain one genuine Windows left-button press from its mouse-down handler.
++    /// Later claim it outside the input handler, after asynchronous drag preparation.
++    /// This does not start a native drag or change GPUI's active drag.
++    #[cfg(windows)]
++    pub fn capture_native_drag_gesture(&self) -> Option<crate::NativeDragGesture> {
++        self.platform_window.capture_native_drag_gesture()
++    }
++
+     /// Toggle zoom on the window.
+     pub fn zoom_window(&self) {
+         self.platform_window.zoom();
+diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
+index 7dc5d536..3ce94ffb 100644
+--- a/crates/gpui_windows/src/events.rs
++++ b/crates/gpui_windows/src/events.rs
+@@ -181,6 +181,7 @@ impl WindowsWindowInner {
+         wparam: WPARAM,
+         lparam: LPARAM,
+     ) -> LRESULT {
++        self.native_drag.observe(msg, wparam, lparam);
+         // Native focus may leave and return before GPUI's deferred observers run.
+         self.state
+             .native_character_authority
+@@ -897,6 +898,8 @@ impl WindowsWindowInner {
+             click_count,
+             first_mouse: false,
+         });
++        let _native_drag_dispatch = (button == MouseButton::Left)
++            .then(|| self.native_drag.begin_left_down());
+         let handled = !func(input).propagate;
+         self.state.callbacks.input.set(Some(func));
+ 
+diff --git a/crates/gpui_windows/src/gpui_windows.rs b/crates/gpui_windows/src/gpui_windows.rs
+index b485a395..e078c97f 100644
+--- a/crates/gpui_windows/src/gpui_windows.rs
++++ b/crates/gpui_windows/src/gpui_windows.rs
+@@ -14,6 +14,7 @@ mod events;
+ mod file_drop;
+ mod keyboard;
+ mod native_characters;
++mod native_drag;
+ mod native_resize;
+ mod platform;
+ mod system_notifications;
+diff --git a/crates/gpui_windows/src/native_drag.rs b/crates/gpui_windows/src/native_drag.rs
+new file mode 100644
+index 00000000..aaa65f6c
+--- /dev/null
++++ b/crates/gpui_windows/src/native_drag.rs
+@@ -0,0 +1,355 @@
++//! Single-use source presses; native tracking owns a different lifetime.
++use gpui::{NativeDragGesture, NativeDragTracking};
++use std::{cell::Cell, rc::Rc};
++use windows::Win32::{
++    Foundation::{HWND, LPARAM, WPARAM},
++    System::Threading::GetCurrentThreadId,
++    UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
++};
++
++#[derive(Clone, Copy, Default)]
++struct State {
++    next: u64,
++    exhausted: bool,
++    retired: bool,
++    dispatch: Option<u64>,
++    pending: Option<u64>,
++    issued: bool,
++    tracking: Option<u64>,
++}
++
++impl State {
++    fn invalidate_pending(&mut self) {
++        self.dispatch = None;
++        self.pending = None;
++        self.issued = false;
++    }
++
++    fn begin(&mut self) -> Option<u64> {
++        self.invalidate_pending();
++        if self.retired || self.exhausted || self.tracking.is_some() {
++            return None;
++        }
++        let Some(next) = self.next.checked_add(1) else {
++            self.exhausted = true;
++            return None;
++        };
++        self.next = next;
++        self.dispatch = Some(next);
++        self.pending = Some(next);
++        Some(next)
++    }
++
++    fn end_dispatch(&mut self, generation: u64) {
++        if self.dispatch == Some(generation) {
++            self.dispatch = None;
++        }
++    }
++
++    fn capture(&mut self) -> Option<u64> {
++        let generation = self.dispatch?;
++        if self.retired || self.pending != Some(generation) || self.issued {
++            return None;
++        }
++        self.issued = true;
++        Some(generation)
++    }
++
++    fn claim(&mut self, generation: u64) -> bool {
++        if self.retired || self.dispatch.is_some() || self.pending != Some(generation)
++            || !self.issued || self.tracking.is_some()
++        {
++            return false;
++        }
++        self.pending = None;
++        self.issued = false;
++        self.tracking = Some(generation);
++        true
++    }
++
++    fn current(&self, generation: u64) -> bool {
++        !self.retired && self.tracking == Some(generation)
++    }
++
++    fn finish(&mut self, generation: u64) {
++        if self.tracking == Some(generation) {
++            self.tracking = None;
++        }
++    }
++
++    fn retire(&mut self) {
++        self.retired = true;
++        self.invalidate_pending();
++        self.tracking = None;
++    }
++}
++
++#[derive(Clone, Copy)]
++struct NativeState {
++    exists: bool,
++    thread: u32,
++    process: u32,
++    caller_thread: u32,
++    foreground: HWND,
++    capture: HWND,
++    held: bool,
++    visible: bool,
++    enabled: bool,
++    minimized: bool,
++}
++
++impl NativeState {
++    fn read(window: HWND) -> Self {
++        let mut process = 0;
++        // These are observations only: no capture, activation or input is created.
++        unsafe {
++            Self {
++                exists: IsWindow(Some(window)).as_bool(),
++                thread: GetWindowThreadProcessId(window, Some(&mut process)),
++                process,
++                caller_thread: GetCurrentThreadId(),
++                foreground: GetForegroundWindow(),
++                capture: GetCapture(),
++                held: GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0,
++                visible: IsWindowVisible(window).as_bool(),
++                enabled: IsWindowEnabled(window).as_bool(),
++                minimized: IsIconic(window).as_bool(),
++            }
++        }
++    }
++
++    fn permits(self, window: HWND, thread: u32, process: u32) -> bool {
++        self.exists && thread != 0 && process != 0
++            && self.thread == thread && self.process == process && self.caller_thread == thread
++            && self.foreground == window && self.capture == window && self.held
++            && self.visible && self.enabled && !self.minimized
++    }
++}
++
++pub(crate) struct Authority {
++    state: Cell<State>,
++    window: HWND,
++    thread: u32,
++    process: u32,
++}
++
++impl Authority {
++    pub(crate) fn new(window: HWND) -> Rc<Self> {
++        let mut process = 0;
++        let thread = unsafe { GetWindowThreadProcessId(window, Some(&mut process)) };
++        Rc::new(Self { state: Cell::new(State::default()), window, thread, process })
++    }
++
++    fn update<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
++        let mut state = self.state.get();
++        let result = f(&mut state);
++        self.state.set(state);
++        result
++    }
++
++    pub(crate) fn begin_left_down(self: &Rc<Self>) -> Dispatch {
++        Dispatch { authority: self.clone(), generation: self.update(State::begin) }
++    }
++
++    pub(crate) fn capture(self: &Rc<Self>) -> Option<NativeDragGesture> {
++        if !NativeState::read(self.window).permits(self.window, self.thread, self.process) {
++            return None;
++        }
++        let generation = self.update(State::capture)?;
++        let weak = Rc::downgrade(self);
++        // The dispatch scope can only be entered by the native mouse-down path.
++        // Claim consumes this generation and repeats the native observations.
++        Some(unsafe {
++            NativeDragGesture::from_platform(move || weak.upgrade()?.claim(generation))
++        })
++    }
++
++    fn claim(self: &Rc<Self>, generation: u64) -> Option<NativeDragTracking> {
++        if !NativeState::read(self.window).permits(self.window, self.thread, self.process) {
++            self.update(|state| {
++                if state.pending == Some(generation) {
++                    state.invalidate_pending();
++                }
++            });
++            return None;
++        }
++        if !self.update(|state| state.claim(generation)) {
++            return None;
++        }
++        let current = Rc::downgrade(self);
++        let finish = current.clone();
++        // Tracking intentionally stops consulting capture, foreground and button
++        // state: OLE owns those transitions after the caller consumes the press.
++        Some(unsafe {
++            NativeDragTracking::from_platform(
++                move || current.upgrade().is_some_and(|owner| owner.state.get().current(generation)),
++                move || {
++                    if let Some(owner) = finish.upgrade() {
++                        owner.update(|state| state.finish(generation));
++                    }
++                },
++            )
++        })
++    }
++
++    pub(crate) fn retire(&self) {
++        self.update(State::retire);
++    }
++
++    pub(crate) fn observe(&self, message: u32, wparam: WPARAM, lparam: LPARAM) {
++        match message {
++            WM_DESTROY | WM_NCDESTROY => self.retire(),
++            WM_LBUTTONDOWN | WM_LBUTTONDBLCLK | WM_NCLBUTTONDOWN | WM_NCLBUTTONDBLCLK
++            | WM_RBUTTONDOWN | WM_NCRBUTTONDOWN | WM_MBUTTONDOWN | WM_NCMBUTTONDOWN
++            | WM_XBUTTONDOWN | WM_NCXBUTTONDOWN | WM_LBUTTONUP | WM_NCLBUTTONUP
++            | WM_CANCELMODE | WM_KILLFOCUS | WM_CLOSE => self.update(State::invalidate_pending),
++            WM_CAPTURECHANGED if lparam.0 != self.window.0 as isize => self.update(State::invalidate_pending),
++            WM_ACTIVATE if wparam.0 as u32 & 0xffff == WA_INACTIVE => self.update(State::invalidate_pending),
++            WM_ACTIVATEAPP | WM_SHOWWINDOW | WM_ENABLE if wparam.0 == 0 => self.update(State::invalidate_pending),
++            WM_SIZE if wparam.0 as u32 == SIZE_MINIMIZED => self.update(State::invalidate_pending),
++            _ => (),
++        }
++    }
++}
++
++/// Scope restoration must not clear a newer reentrant press or survive a panic.
++pub(crate) struct Dispatch {
++    authority: Rc<Authority>,
++    generation: Option<u64>,
++}
++
++impl Drop for Dispatch {
++    fn drop(&mut self) {
++        if let Some(generation) = self.generation {
++            self.authority.update(|state| state.end_dispatch(generation));
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn authority() -> Rc<Authority> {
++        Rc::new(Authority { state: Cell::new(State::default()),
++            window: HWND(1usize as *mut _), thread: 2, process: 3 })
++    }
++
++    fn pending(owner: &Rc<Authority>) -> u64 {
++        let dispatch = owner.begin_left_down();
++        let generation = owner.update(State::capture).unwrap();
++        drop(dispatch);
++        generation
++    }
++
++    #[test]
++    fn only_one_token_is_captured_during_native_dispatch_and_claim_is_deferred() {
++        let owner = authority();
++        assert_eq!(owner.update(State::capture), None);
++        let dispatch = owner.begin_left_down();
++        let generation = owner.update(State::capture).unwrap();
++        assert_eq!(owner.update(State::capture), None);
++        assert!(!owner.update(|state| state.claim(generation)));
++        drop(dispatch);
++        assert_eq!(owner.update(State::capture), None);
++        assert!(owner.update(|state| state.claim(generation)));
++        assert!(!owner.update(|state| state.claim(generation)));
++    }
++
++    #[test]
++    fn stale_dispatch_scope_cannot_clear_a_newer_press() {
++        let owner = authority();
++        let first_dispatch = owner.begin_left_down();
++        let first = owner.update(State::capture).unwrap();
++        let next_dispatch = owner.begin_left_down();
++        let next = owner.update(State::capture).unwrap();
++        drop(first_dispatch);
++        assert_eq!(owner.state.get().dispatch, Some(next));
++        assert!(!owner.update(|state| state.claim(first)));
++        drop(next_dispatch);
++        assert!(owner.update(|state| state.claim(next)));
++    }
++
++    #[test]
++    fn native_pending_invalidation_is_not_undone_by_reacquiring_the_same_state() {
++        for (message, wparam, lparam) in [
++            (WM_LBUTTONUP, 0, 0), (WM_NCLBUTTONUP, 0, 0),
++            (WM_LBUTTONDOWN, 0, 0), (WM_RBUTTONDOWN, 0, 0),
++            (WM_CAPTURECHANGED, 0, 2), (WM_CANCELMODE, 0, 0),
++            (WM_ACTIVATE, WA_INACTIVE as usize, 0), (WM_ACTIVATEAPP, 0, 0),
++            (WM_KILLFOCUS, 0, 0), (WM_SHOWWINDOW, 0, 0),
++            (WM_ENABLE, 0, 0), (WM_SIZE, SIZE_MINIMIZED as usize, 0),
++        ] {
++            let owner = authority();
++            let generation = pending(&owner);
++            owner.observe(message, WPARAM(wparam), LPARAM(lparam));
++            owner.observe(WM_ACTIVATE, WPARAM(WA_ACTIVE as usize), LPARAM(0));
++            owner.observe(WM_CAPTURECHANGED, WPARAM(0), LPARAM(1));
++            assert!(!owner.update(|state| state.claim(generation)), "message {message}");
++        }
++    }
++
++    #[test]
++    fn claimed_tracking_survives_ole_transitions_but_not_source_retirement() {
++        let owner = authority();
++        let generation = pending(&owner);
++        assert!(owner.update(|state| state.claim(generation)));
++        for (message, wparam, lparam) in [
++            (WM_CAPTURECHANGED, 0, 2), (WM_ACTIVATE, WA_INACTIVE as usize, 0),
++            (WM_ACTIVATEAPP, 0, 0), (WM_KILLFOCUS, 0, 0),
++            (WM_LBUTTONUP, 0, 0), (WM_CANCELMODE, 0, 0),
++        ] {
++            owner.observe(message, WPARAM(wparam), LPARAM(lparam));
++            assert!(owner.state.get().current(generation), "message {message}");
++        }
++        assert_eq!(owner.update(State::begin), None);
++        assert!(owner.state.get().current(generation));
++        owner.observe(WM_NCDESTROY, WPARAM(0), LPARAM(0));
++        assert!(!owner.state.get().current(generation));
++        assert_eq!(owner.update(State::begin), None);
++    }
++
++    #[test]
++    fn finishing_tracking_cannot_release_a_later_operation() {
++        let owner = authority();
++        let old = pending(&owner);
++        assert!(owner.update(|state| state.claim(old)));
++        owner.update(|state| state.finish(old));
++        let next = pending(&owner);
++        assert!(owner.update(|state| state.claim(next)));
++        owner.update(|state| state.finish(old));
++        assert!(owner.state.get().current(next));
++    }
++
++    #[test]
++    fn native_identity_and_held_button_are_all_required_at_claim() {
++        let window = HWND(1usize as *mut _);
++        let valid = NativeState { exists: true, thread: 2, process: 3, caller_thread: 2,
++            foreground: window, capture: window, held: true, visible: true,
++            enabled: true, minimized: false };
++        assert!(valid.permits(window, 2, 3));
++        for invalid in [
++            NativeState { exists: false, ..valid }, NativeState { thread: 4, ..valid },
++            NativeState { process: 4, ..valid }, NativeState { caller_thread: 4, ..valid },
++            NativeState { foreground: HWND::default(), ..valid },
++            NativeState { capture: HWND::default(), ..valid }, NativeState { held: false, ..valid },
++            NativeState { visible: false, ..valid }, NativeState { enabled: false, ..valid },
++            NativeState { minimized: true, ..valid },
++        ] {
++            assert!(!invalid.permits(window, 2, 3));
++        }
++        assert!(!valid.permits(window, 0, 3));
++        assert!(!valid.permits(window, 2, 0));
++    }
++
++    #[test]
++    fn press_generations_never_wrap_or_revive_after_retirement() {
++        let owner = authority();
++        owner.update(|state| state.next = u64::MAX - 1);
++        assert_eq!(pending(&owner), u64::MAX);
++        assert_eq!(owner.update(State::begin), None);
++        assert!(owner.state.get().exhausted);
++        assert_eq!(owner.update(State::begin), None);
++        assert!(!owner.update(|state| state.claim(u64::MAX)));
++    }
++}
+diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
+index f2191b00..593a55a6 100644
+--- a/crates/gpui_windows/src/window.rs
++++ b/crates/gpui_windows/src/window.rs
+@@ -168,6 +168,7 @@ pub struct WindowsWindowState {
+ 
+ pub(crate) struct WindowsWindowInner {
+     pub(crate) local_file_drop: crate::file_drop::LocalFileDrop,
++    pub(crate) native_drag: Rc<crate::native_drag::Authority>,
+     is_popup: bool,
+     pub(crate) mouse_passthrough: Cell<bool>,
+     ole_drop_registered: Cell<bool>,
+@@ -468,6 +469,7 @@ impl WindowsWindowInner {
+ 
+         Ok(Rc::new(Self {
+             local_file_drop: crate::file_drop::LocalFileDrop::new(context.local_file_drop),
++            native_drag: crate::native_drag::Authority::new(hwnd),
+             is_popup: context.is_popup,
+             mouse_passthrough: Cell::new(context.mouse_passthrough),
+             ole_drop_registered: Cell::new(false),
+@@ -840,6 +842,7 @@ impl WindowsWindowInner {
+ 
+ impl Drop for WindowsWindow {
+     fn drop(&mut self) {
++        self.0.native_drag.retire();
+         self.0.state.native_character_authority.retire();
+         self.0.state.closing.set(true);
+         self.0.local_file_drop.retire(self.0.hwnd);
+@@ -997,6 +1000,9 @@ impl PlatformWindow for WindowsWindow {
+             .local_file_drop
+             .enable(self.0.hwnd, enabled && !self.0.state.closing.get());
+     }
++    fn capture_native_drag_gesture(&self) -> Option<NativeDragGesture> {
++        self.0.native_drag.capture()
++    }
+     fn bounds(&self) -> Bounds<Pixels> {
+         self.state.bounds()
+     }

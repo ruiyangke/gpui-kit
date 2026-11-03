@@ -1,0 +1,1904 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ruiyangke <me@ry.ke>
+Date: Wed, 28 Oct 2026 00:00:01 +0000
+Subject: [PATCH] gpui_windows: Window control for app-drawn title bars
+
+Apps that draw their own title bar need the window controls that Wayland
+and X11 already offer. On Windows, GPUI gains:
+
+- start_window_move, start_window_resize and show_window_menu. They run
+  native modal loops, so they start after GPUI's update returns.
+- Client decorations (`WindowDecorations::Client`): the whole window is
+  drawable, keeps native resize edges, and a maximized window's client is
+  clipped to the work area. request_decorations changes them at runtime.
+- set_resizable, set_minimizable, set_maximizable and set_maximized at
+  runtime, and is_in_live_resize. Maximize permission follows resize
+  permission until it is set.
+- A native resize constraint (`NativeResizeConstraint`), applied in
+  WM_SIZING and WM_GETMINMAXINFO without entering GPUI.
+- zoom toggles between maximized and restored; resize measures the frame
+  on the UI thread before it applies a client size; a window created
+  hidden first shows with the requested activation.
+
+Newport needs it for Remote apps on Windows: Linux apps draw their own
+title bars and move, resize and maximize themselves.
+
+set_native_resize_constraint has no default. It exists only on Windows,
+where gpui_windows and the test window implement it. The other new trait
+methods have defaults, and other platforms are unchanged. WindowParams
+gains a Windows-only window_decorations field.
+
+Remove when upstream gpui_windows supports client decorations and these
+window controls.
+---
+ crates/gpui/src/platform.rs              |  40 +-
+ crates/gpui/src/platform/test/window.rs  |   5 +
+ crates/gpui/src/window.rs                |  69 ++-
+ crates/gpui_windows/src/client_frame.rs  | 163 ++++++
+ crates/gpui_windows/src/events.rs        | 237 ++++++++-
+ crates/gpui_windows/src/native_resize.rs | 251 +++++++++
+ crates/gpui_windows/src/window.rs        | 625 +++++++++++++++++++++--
+ crates/gpui_windows/src/window_state.rs  |  37 ++
+ 8 files changed, 1359 insertions(+), 68 deletions(-)
+ create mode 100644 crates/gpui_windows/src/client_frame.rs
+ create mode 100644 crates/gpui_windows/src/window_state.rs
+
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index 453a6cfc..f7bc3fe4 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -1220,6 +1220,28 @@ pub enum TextInputStateChange {
+     ContentChanged,
+ }
+ 
++/// Immutable client-size policy used by the Windows native sizing loop.
++///
++/// The selector receives and returns logical client dimensions. It must be
++/// bounded and pure: no GPUI access, native calls, window capture, or mutation.
++/// Returning `None` refuses that resize. Minimum and maximum must be finite,
++/// positive, and ordered; invalid values also refuse resizing.
++#[cfg(windows)]
++#[derive(Clone)]
++pub enum NativeResizeConstraint {
++    /// Keep the HWND's current size during an interactive resize.
++    Fixed,
++    /// Select a legal client size within the supplied bounds.
++    Constrained {
++        /// Smallest legal logical client size.
++        minimum: Size<Pixels>,
++        /// Largest legal logical client size.
++        maximum: Size<Pixels>,
++        /// Nearest legal logical client size, or refusal.
++        select: Rc<dyn Fn(Size<Pixels>) -> Option<Size<Pixels>>>,
++    },
++}
++
+ #[expect(missing_docs)]
+ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+     fn bounds(&self) -> Bounds<Pixels>;
+@@ -1247,6 +1269,9 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+         false
+     }
+     fn resize(&mut self, size: Size<Pixels>);
++    /// Replace the immutable native sizing policy; `None` restores platform defaults.
++    #[cfg(windows)]
++    fn set_native_resize_constraint(&self, constraint: Option<NativeResizeConstraint>);
+     fn scale_factor(&self) -> f32;
+     fn appearance(&self) -> WindowAppearance;
+     fn display(&self) -> Option<Rc<dyn PlatformDisplay>>;
+@@ -1365,6 +1390,15 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+         false
+     }
+     fn start_window_resize(&self, _edge: ResizeEdge) {}
++    fn set_resizable(&self, _resizable: bool) {}
++    fn set_minimizable(&self, _minimizable: bool) {}
++    #[cfg(windows)]
++    fn set_maximizable(&self, _maximizable: bool) {}
++    #[cfg(windows)]
++    fn set_maximized(&self, _maximized: bool) {}
++    fn is_in_live_resize(&self) -> bool {
++        false
++    }
+     fn set_exclusive_zone(&self, _zone: Pixels) {}
+     #[cfg(all(target_os = "linux", feature = "wayland"))]
+     fn set_exclusive_edge(&self, _edge: layer_shell::Anchor) {}
+@@ -2640,7 +2674,9 @@ pub struct WindowOptions {
+     /// Window minimum size
+     pub window_min_size: Option<Size<Pixels>>,
+ 
+-    /// Whether to use client or server-side decorations on X11 and Wayland.
++    /// Whether to use client or server-side decorations on X11, Wayland and Windows.
++    /// On Windows, Client gives the app the whole window's drawable area and
++    /// retains native resize hit testing and maximized work-area bounds.
+     /// The platform may ignore requests it cannot satisfy.
+     pub window_decorations: Option<WindowDecorations>,
+ 
+@@ -2665,6 +2701,8 @@ pub struct WindowOptions {
+ )]
+ #[allow(missing_docs)]
+ pub struct WindowParams {
++    #[cfg(windows)]
++    pub window_decorations: WindowDecorations,
+     pub bounds: Bounds<Pixels>,
+ 
+     /// The titlebar configuration of the window
+diff --git a/crates/gpui/src/platform/test/window.rs b/crates/gpui/src/platform/test/window.rs
+index 3907129e..9b6c9c82 100644
+--- a/crates/gpui/src/platform/test/window.rs
++++ b/crates/gpui/src/platform/test/window.rs
+@@ -313,6 +313,11 @@ impl TestWindow {
+ }
+ 
+ impl PlatformWindow for TestWindow {
++    #[cfg(windows)]
++    fn set_native_resize_constraint(&self, _: Option<crate::NativeResizeConstraint>) {
++        // This backend has no HWND or native sizing loop.
++    }
++
+     fn visual_viewport_bounds(&self) -> Bounds<Pixels> {
+         let state = self.0.lock();
+         state
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 18fb7f38..fce257ee 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1230,6 +1230,8 @@ pub struct Window {
+     pub(crate) display_observers: SubscriberSet<(), AnyObserver>,
+     is_resizable: bool,
+     is_minimizable: bool,
++    #[cfg(windows)]
++    maximizable: Option<bool>,
+     sprite_atlas: Arc<dyn PlatformAtlas>,
+     text_system: Arc<WindowTextSystem>,
+     text_rendering_mode: Rc<Cell<TextRenderingMode>>,
+@@ -1619,6 +1621,8 @@ impl Window {
+         let mut platform_window = cx.platform.open_window(
+             handle,
+             WindowParams {
++                #[cfg(windows)]
++                window_decorations: window_decorations.unwrap_or(WindowDecorations::Server),
+                 bounds: window_bounds.get_bounds(),
+                 titlebar,
+                 kind,
+@@ -2142,6 +2146,8 @@ impl Window {
+             display_observers: SubscriberSet::new(),
+             is_resizable,
+             is_minimizable,
++            #[cfg(windows)]
++            maximizable: None,
+             sprite_atlas,
+             text_system,
+             text_rendering_mode: cx.text_rendering_mode.clone(),
+@@ -2491,7 +2497,8 @@ impl Window {
+         self.platform_window.is_maximized()
+     }
+ 
+-    /// request a certain window decoration (Wayland)
++    /// Request client or server decorations on platforms that support them.
++    /// Windows applies runtime frame changes after the current update.
+     pub fn request_decorations(&self, decorations: WindowDecorations) {
+         self.platform_window.request_decorations(decorations);
+     }
+@@ -3006,6 +3013,16 @@ impl Window {
+         }
+     }
+ 
++    /// Replace the Windows native resize policy synchronously.
++    ///
++    /// The selector runs inside Win32 sizing messages and must not access GPUI
++    /// or native windows. The HWND releases the snapshot when replaced or closed.
++    #[cfg(windows)]
++    pub fn set_native_resize_constraint(&self, constraint: Option<crate::NativeResizeConstraint>) {
++        self.platform_window
++            .set_native_resize_constraint(constraint);
++    }
++
+     /// Toggle zoom on the window.
+     pub fn zoom_window(&self) {
+         self.platform_window.zoom();
+@@ -3016,7 +3033,7 @@ impl Window {
+         self.platform_window.show_window_menu(position)
+     }
+ 
+-    /// Handle window movement for Linux and macOS.
++    /// Start native window movement.
+     /// Tells the compositor to take control of window movement (Wayland and X11)
+     ///
+     /// Events may not be received during a move operation.
+@@ -3045,11 +3062,59 @@ impl Window {
+         self.is_resizable
+     }
+ 
++    /// Update resize permission and the platform's native window controls.
++    #[cfg(target_os = "windows")]
++    pub fn set_resizable(&mut self, resizable: bool) {
++        if self.is_resizable != resizable {
++            self.is_resizable = resizable;
++            self.platform_window.set_resizable(resizable);
++        }
++    }
++
+     /// Returns whether this window is minimizable.
+     pub fn is_minimizable(&self) -> bool {
+         self.is_minimizable
+     }
+ 
++    /// Update minimize permission and the platform's native window controls.
++    #[cfg(target_os = "windows")]
++    pub fn set_minimizable(&mut self, minimizable: bool) {
++        if self.is_minimizable != minimizable {
++            self.is_minimizable = minimizable;
++            self.platform_window.set_minimizable(minimizable);
++        }
++    }
++
++    /// Set Windows maximize permission independently from resize permission.
++    /// Until explicitly set, maximize permission follows resize permission.
++    #[cfg(windows)]
++    pub fn set_maximizable(&mut self, maximizable: bool) {
++        if self.maximizable != Some(maximizable) {
++            self.maximizable = Some(maximizable);
++            self.platform_window.set_maximizable(maximizable);
++        }
++    }
++
++    /// Whether Windows offers maximize through its native controls.
++    #[cfg(windows)]
++    pub fn is_maximizable(&self) -> bool {
++        self.maximizable.unwrap_or(self.is_resizable)
++    }
++
++    /// Request an absolute Windows maximize state without toggling a pending request.
++    /// Fullscreen, minimized, and interactively resizing windows retain their
++    /// state; callers defer until restored. Visible restore does not activate.
++    #[cfg(windows)]
++    pub fn set_maximized(&self, maximized: bool) {
++        self.platform_window.set_maximized(maximized);
++    }
++
++    /// Whether the platform is running an interactive window move or resize.
++    #[cfg(target_os = "windows")]
++    pub fn is_in_live_resize(&self) -> bool {
++        self.platform_window.is_in_live_resize()
++    }
++
+     /// Returns the controls supported by the platform.
+     pub fn window_controls(&self) -> WindowControls {
+         self.platform_window.window_controls()
+diff --git a/crates/gpui_windows/src/client_frame.rs b/crates/gpui_windows/src/client_frame.rs
+new file mode 100644
+index 00000000..1a5ffa96
+--- /dev/null
++++ b/crates/gpui_windows/src/client_frame.rs
+@@ -0,0 +1,163 @@
++//! Physical hit testing and work-area clipping for opt-in client decorations.
++use windows::Win32::{
++    Foundation::{POINT, RECT},
++    UI::WindowsAndMessaging::{
++        HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTNOWHERE, HTRIGHT, HTTOP,
++        HTTOPLEFT, HTTOPRIGHT,
++    },
++};
++
++pub(crate) fn maximized_client(proposed: RECT, work_area: RECT) -> Option<RECT> {
++    let rect = RECT {
++        left: proposed.left.max(work_area.left),
++        top: proposed.top.max(work_area.top),
++        right: proposed.right.min(work_area.right),
++        bottom: proposed.bottom.min(work_area.bottom),
++    };
++    (rect.left < rect.right && rect.top < rect.bottom).then_some(rect)
++}
++
++pub(crate) fn hit_test(bounds: RECT, cursor: POINT, thickness: [i32; 2]) -> u32 {
++    if cursor.x < bounds.left
++        || cursor.x >= bounds.right
++        || cursor.y < bounds.top
++        || cursor.y >= bounds.bottom
++    {
++        return HTNOWHERE;
++    }
++    // Native RECT coordinates may span negative monitor origins. Use wider
++    // arithmetic and disjoint bands even for a window smaller than two borders.
++    let width = i64::from(bounds.right) - i64::from(bounds.left);
++    let height = i64::from(bounds.bottom) - i64::from(bounds.top);
++    let x = i64::from(cursor.x) - i64::from(bounds.left);
++    let y = i64::from(cursor.y) - i64::from(bounds.top);
++    let horizontal = i64::from(thickness[0].max(0)).min(width / 2);
++    let vertical = i64::from(thickness[1].max(0)).min(height / 2);
++    let left = x < horizontal;
++    let right = x >= width - horizontal;
++    let top = y < vertical;
++    let bottom = y >= height - vertical;
++    match (left, right, top, bottom) {
++        (true, _, true, _) => HTTOPLEFT,
++        (_, true, true, _) => HTTOPRIGHT,
++        (true, _, _, true) => HTBOTTOMLEFT,
++        (_, true, _, true) => HTBOTTOMRIGHT,
++        (true, _, _, _) => HTLEFT,
++        (_, true, _, _) => HTRIGHT,
++        (_, _, true, _) => HTTOP,
++        (_, _, _, true) => HTBOTTOM,
++        _ => HTCLIENT,
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::{hit_test, maximized_client};
++    use windows::Win32::{
++        Foundation::{POINT, RECT},
++        UI::WindowsAndMessaging::{
++            HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTNOWHERE, HTRIGHT, HTTOP,
++            HTTOPLEFT, HTTOPRIGHT,
++        },
++    };
++
++    #[test]
++    fn all_edges_use_physical_dpi_bands_and_negative_monitor_origins() {
++        let bounds = RECT {
++            left: -1600,
++            top: -900,
++            right: -400,
++            bottom: -100,
++        };
++        for dpi in [96, 120, 144, 192, 240, 288] {
++            let bands = [8 * dpi / 96, 9 * dpi / 96];
++            for (x, y, expected) in [
++                (-1600, -900, HTTOPLEFT),
++                (-1000, -900, HTTOP),
++                (-401, -900, HTTOPRIGHT),
++                (-1600, -500, HTLEFT),
++                (-401, -500, HTRIGHT),
++                (-1600, -101, HTBOTTOMLEFT),
++                (-1000, -101, HTBOTTOM),
++                (-401, -101, HTBOTTOMRIGHT),
++                (-1600 + bands[0], -900 + bands[1], HTCLIENT),
++                (-1600 - 1, -500, HTNOWHERE),
++                (-400, -500, HTNOWHERE),
++            ] {
++                assert_eq!(hit_test(bounds, POINT { x, y }, bands), expected);
++            }
++        }
++    }
++
++    #[test]
++    fn tiny_and_extreme_bounds_do_not_overflow_or_overlap_edge_bands() {
++        let tiny = RECT {
++            left: -1,
++            top: -1,
++            right: 2,
++            bottom: 2,
++        };
++        assert_eq!(hit_test(tiny, POINT { x: 0, y: 0 }, [100; 2]), HTCLIENT);
++        assert_eq!(
++            hit_test(tiny, POINT { x: 1, y: 1 }, [100; 2]),
++            HTBOTTOMRIGHT
++        );
++        let extreme = RECT {
++            left: i32::MIN,
++            top: i32::MIN,
++            right: i32::MAX,
++            bottom: i32::MAX,
++        };
++        assert_eq!(hit_test(extreme, POINT { x: 0, y: 0 }, [8; 2]), HTCLIENT);
++    }
++
++    #[test]
++    fn maximized_client_excludes_taskbar_on_any_monitor_edge() {
++        let outer = RECT {
++            left: -1616,
++            top: -916,
++            right: 16,
++            bottom: 16,
++        };
++        for work in [
++            RECT {
++                left: -1600,
++                top: -900,
++                right: 0,
++                bottom: -80,
++            },
++            RECT {
++                left: -1600,
++                top: -820,
++                right: 0,
++                bottom: 0,
++            },
++            RECT {
++                left: -1520,
++                top: -900,
++                right: 0,
++                bottom: 0,
++            },
++            RECT {
++                left: -1600,
++                top: -900,
++                right: -80,
++                bottom: 0,
++            },
++        ] {
++            assert_eq!(maximized_client(outer, work), Some(work));
++        }
++        assert!(
++            maximized_client(
++                outer,
++                RECT {
++                    left: 100,
++                    top: 100,
++                    right: 200,
++                    bottom: 200
++                }
++            )
++            .is_none()
++        );
++    }
++}
+diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
+index 5709e3cd..6f761b24 100644
+--- a/crates/gpui_windows/src/events.rs
++++ b/crates/gpui_windows/src/events.rs
+@@ -31,6 +31,32 @@ pub(crate) const WM_GPUI_DISPLAYS_CHANGED: u32 = WM_USER + 10;
+ 
+ const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
+ 
++#[derive(Clone, Copy, Default)]
++pub(crate) struct NativeModalLoops {
++    size_move: bool,
++    menus: u32,
++}
++
++impl NativeModalLoops {
++    pub(crate) fn in_size_move(self) -> bool {
++        self.size_move
++    }
++
++    fn active(self) -> bool {
++        self.size_move || self.menus > 0
++    }
++
++    fn update(&mut self, message: u32) {
++        match message {
++            WM_ENTERSIZEMOVE => self.size_move = true,
++            WM_EXITSIZEMOVE => self.size_move = false,
++            WM_ENTERMENULOOP => self.menus = self.menus.saturating_add(1),
++            WM_EXITMENULOOP => self.menus = self.menus.saturating_sub(1),
++            _ => {}
++        }
++    }
++}
++
+ /// Coordinates window draws on the UI thread. Owned by the platform and
+ /// shared with every window (like `WindowsPlatformState::cursor_visible`),
+ /// because the coordination is inherently cross-window: while window A is
+@@ -93,13 +119,26 @@ impl WindowsWindowInner {
+             // press, `DefWindowProc` never sees it, so the window is never activated at all.
+             // So, let's eagerly activate the window.
+             WM_MOUSEACTIVATE => Some(MA_ACTIVATE as isize),
++            WM_SYSCOMMAND if wparam.0 as u32 & 0xfff0 == SC_MAXIMIZE && !self.is_maximizable() => {
++                Some(0)
++            }
+             WM_ACTIVATE => self.handle_activate_msg(wparam),
+             WM_CREATE => self.handle_create_msg(handle),
+             WM_MOVE => self.handle_move_msg(handle, lparam),
+             WM_SIZE => self.handle_size_msg(wparam, lparam),
+             WM_GETMINMAXINFO => self.handle_get_min_max_info_msg(lparam),
+-            WM_ENTERSIZEMOVE | WM_ENTERMENULOOP => self.handle_size_move_loop(handle),
+-            WM_EXITSIZEMOVE | WM_EXITMENULOOP => self.handle_size_move_loop_exit(handle),
++            WM_SIZING => self.handle_sizing_msg(wparam, lparam),
++            WM_ENTERSIZEMOVE | WM_EXITSIZEMOVE | WM_ENTERMENULOOP | WM_EXITMENULOOP => {
++                let mut loops = self.state.modal_loops.get();
++                let was_active = loops.active();
++                loops.update(msg);
++                self.state.modal_loops.set(loops);
++                match (was_active, loops.active()) {
++                    (false, true) => self.handle_size_move_loop(handle),
++                    (true, false) => self.handle_size_move_loop_exit(handle),
++                    _ => None,
++                }
++            }
+             WM_TIMER => self.handle_timer_msg(handle, wparam),
+             WM_NCCALCSIZE => self.handle_calc_client_size(handle, wparam, lparam),
+             WM_GETDPISCALEDSIZE => self.handle_get_dpi_scaled_size_msg(handle, wparam, lparam),
+@@ -205,7 +244,92 @@ impl WindowsWindowInner {
+         Some(0)
+     }
+ 
++    fn native_resize_geometry(&self) -> Option<crate::native_resize::Geometry> {
++        let mut outer = RECT::default();
++        let mut client = RECT::default();
++        // SAFETY: these messages are dispatched to this live HWND on its UI thread.
++        unsafe {
++            GetWindowRect(self.native_handle(), &mut outer).ok()?;
++            GetClientRect(self.native_handle(), &mut client).ok()?;
++        }
++        crate::native_resize::Geometry::measure(
++            [outer.left, outer.top, outer.right, outer.bottom],
++            [client.right - client.left, client.bottom - client.top],
++            self.state.decorations.get() == WindowDecorations::Client,
++            unsafe { GetDpiForWindow(self.native_handle()) },
++        )
++    }
++
++    fn native_resize_policy(&self) -> Option<NativeResizeConstraint> {
++        if self.state.closing.get() || self.state.is_fullscreen() {
++            return None;
++        }
++        if !self.is_resizable.get() {
++            return Some(NativeResizeConstraint::Fixed);
++        }
++        // Release the borrow before calling the immutable policy. Native
++        // message delivery can nest even though the selector itself is pure.
++        self.state.resize_constraint.borrow().clone()
++    }
++
++    fn handle_sizing_msg(&self, wparam: WPARAM, lparam: LPARAM) -> Option<isize> {
++        if lparam.0 == 0 || self.state.is_maximized() {
++            return None;
++        }
++        let policy = self.native_resize_policy()?;
++        let geometry = self.native_resize_geometry()?;
++        // SAFETY: WM_SIZING supplies a writable screen-coordinate RECT.
++        unsafe {
++            let proposed = &mut *(lparam.0 as *mut RECT);
++            let rect = geometry
++                .constrain(
++                    [proposed.left, proposed.top, proposed.right, proposed.bottom],
++                    u32::try_from(wparam.0).ok()?,
++                    &policy,
++                )
++                .unwrap_or(geometry.current);
++            *proposed = RECT {
++                left: rect[0],
++                top: rect[1],
++                right: rect[2],
++                bottom: rect[3],
++            };
++        }
++        Some(1)
++    }
++
+     fn handle_get_min_max_info_msg(&self, lparam: LPARAM) -> Option<isize> {
++        if lparam.0 == 0 {
++            return None;
++        }
++        if let Some(policy) = self.native_resize_policy().filter(|policy| {
++            // WM_GETMINMAXINFO also runs during SetWindowPlacement/SetWindowPos.
++            // Non-resizable means the user cannot resize, not that a programmatic
++            // content update must retain the old (or constructor-default) size.
++            // WM_SIZING still applies Fixed, and native styles/hit testing reject
++            // user resize even outside the size/move loop.
++            !matches!(policy, NativeResizeConstraint::Fixed)
++                || self.state.modal_loops.get().in_size_move()
++        }) {
++            let geometry = self.native_resize_geometry()?;
++            let (min, max) = geometry
++                .limits(&policy)
++                .or_else(|| geometry.limits(&NativeResizeConstraint::Fixed))?;
++            // SAFETY: WM_GETMINMAXINFO supplies writable tracking limits.
++            // Keep ptMaxSize/ptMaxPosition native-owned for maximize and Snap.
++            unsafe {
++                let info = &mut *(lparam.0 as *mut MINMAXINFO);
++                info.ptMinTrackSize = POINT {
++                    x: min[0],
++                    y: min[1],
++                };
++                info.ptMaxTrackSize = POINT {
++                    x: max[0],
++                    y: max[1],
++                };
++            }
++            return Some(0);
++        }
+         let min_size = self.state.min_size?;
+         let scale_factor = self.state.scale_factor.get();
+         let boarder_offset = &self.state.border_offset;
+@@ -234,6 +358,13 @@ impl WindowsWindowInner {
+             return Some(0);
+         }
+ 
++        if self.state.decorations.get() == WindowDecorations::Client {
++            self.state
++                .border_offset
++                .update(self.native_handle())
++                .log_err();
++        }
++
+         let width = lparam.loword().max(1) as i32;
+         let height = lparam.hiword().max(1) as i32;
+         let new_size = size(DevicePixels(width), DevicePixels(height));
+@@ -325,6 +456,7 @@ impl WindowsWindowInner {
+     }
+ 
+     fn handle_destroy_msg(&self, handle: HWND) -> Option<isize> {
++        self.state.closing.set(true);
+         let callback = { self.state.callbacks.close.take() };
+         // Re-enable parent window if this was a modal dialog
+         if let Some(parent_hwnd) = self.parent_hwnd {
+@@ -782,6 +914,24 @@ impl WindowsWindowInner {
+         wparam: WPARAM,
+         lparam: LPARAM,
+     ) -> Option<isize> {
++        if self.state.decorations.get() == WindowDecorations::Client && lparam.0 != 0 {
++            // Both message forms begin with the proposed window RECT. Returning
++            // zero makes it drawable; preserve the OS-owned maximized outer
++            // frame while clipping its client area away from the taskbar.
++            let proposed = unsafe { &mut *(lparam.0 as *mut RECT) };
++            if self.state.is_maximized() {
++                let monitor = unsafe { MonitorFromRect(proposed, MONITOR_DEFAULTTONEAREST) };
++                let mut info = MONITORINFO {
++                    cbSize: std::mem::size_of::<MONITORINFO>() as u32,
++                    ..Default::default()
++                };
++                unsafe { GetMonitorInfoW(monitor, &mut info) }
++                    .ok()
++                    .log_err()?;
++                *proposed = crate::window::client_frame::maximized_client(*proposed, info.rcWork)?;
++            }
++            return Some(0);
++        }
+         if !self.hide_title_bar || self.state.is_fullscreen() || wparam.0 == 0 {
+             return None;
+         }
+@@ -866,7 +1016,7 @@ impl WindowsWindowInner {
+     }
+ 
+     fn handle_create_msg(&self, handle: HWND) -> Option<isize> {
+-        if self.hide_title_bar {
++        if self.hide_title_bar || self.state.decorations.get() == WindowDecorations::Client {
+             notify_frame_changed(handle);
+             Some(0)
+         } else {
+@@ -896,14 +1046,18 @@ impl WindowsWindowInner {
+         unsafe { GetClientRect(handle, &mut client) }.ok()?;
+         let from = unsafe { GetDpiForWindow(handle) };
+         let dpi = wparam.0 as u32;
+-        let mut frame = RECT::default();
+-        let style = WINDOW_STYLE(unsafe { get_window_long(handle, GWL_STYLE) } as u32);
+-        let extended = WINDOW_EX_STYLE(unsafe { get_window_long(handle, GWL_EXSTYLE) } as u32);
+-        unsafe { AdjustWindowRectExForDpi(&mut frame, style, false, extended, dpi) }.ok()?;
+-        let chrome = crate::native_resize::frame_chrome(
+-            [frame.left, frame.top, frame.right, frame.bottom],
+-            self.hide_title_bar,
+-        )?;
++        let chrome = if self.state.decorations.get() == WindowDecorations::Client {
++            [0, 0]
++        } else {
++            let mut frame = RECT::default();
++            let style = WINDOW_STYLE(unsafe { get_window_long(handle, GWL_STYLE) } as u32);
++            let extended = WINDOW_EX_STYLE(unsafe { get_window_long(handle, GWL_EXSTYLE) } as u32);
++            unsafe { AdjustWindowRectExForDpi(&mut frame, style, false, extended, dpi) }.ok()?;
++            crate::native_resize::frame_chrome(
++                [frame.left, frame.top, frame.right, frame.bottom],
++                self.hide_title_bar,
++            )?
++        };
+         let [width, height] = crate::native_resize::dpi_scaled_size(
+             [client.right - client.left, client.bottom - client.top],
+             from,
+@@ -1042,7 +1196,26 @@ impl WindowsWindowInner {
+ 
+     fn handle_hit_test_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
+         if self.state.is_fullscreen() {
+-            return None;
++            return (self.state.decorations.get() == WindowDecorations::Client)
++                .then_some(HTCLIENT as isize);
++        }
++
++        let client_decorated = self.state.decorations.get() == WindowDecorations::Client;
++        if client_decorated && self.is_resizable.get() && !self.state.is_maximized() {
++            let mut bounds = RECT::default();
++            unsafe { GetWindowRect(handle, &mut bounds) }.log_err()?;
++            let dpi = unsafe { GetDpiForWindow(handle) };
++            let hit = crate::window::client_frame::hit_test(
++                bounds,
++                POINT {
++                    x: lparam.signed_loword().into(),
++                    y: lparam.signed_hiword().into(),
++                },
++                [get_frame_thicknessx(dpi), get_frame_thicknessy(dpi)],
++            );
++            if hit != HTCLIENT {
++                return Some(hit as isize);
++            }
+         }
+ 
+         let callback = self.state.callbacks.hit_test_window_control.take();
+@@ -1056,10 +1229,10 @@ impl WindowsWindowInner {
+                 WindowControlArea::Drag if self.is_movable => Some(HTCAPTION as _),
+                 WindowControlArea::Drag => None,
+                 WindowControlArea::Close => Some(HTCLOSE as _),
+-                WindowControlArea::Max if self.is_resizable => Some(HTMAXBUTTON as _),
++                WindowControlArea::Max if self.is_maximizable() => Some(HTMAXBUTTON as _),
+                 WindowControlArea::Max if self.is_movable => Some(HTCAPTION as _),
+                 WindowControlArea::Max => Some(HTNOWHERE as _),
+-                WindowControlArea::Min if self.is_minimizable => Some(HTMINBUTTON as _),
++                WindowControlArea::Min if self.is_minimizable.get() => Some(HTMINBUTTON as _),
+                 WindowControlArea::Min if self.is_movable => Some(HTCAPTION as _),
+                 WindowControlArea::Min => Some(HTNOWHERE as _),
+             })
+@@ -1067,6 +1240,10 @@ impl WindowsWindowInner {
+             None
+         };
+ 
++        if client_decorated {
++            return Some(drag_area.unwrap_or(HTCLIENT as isize));
++        }
++
+         if !self.hide_title_bar {
+             // If the OS draws the title bar, we don't need to handle hit test messages.
+             return drag_area;
+@@ -1083,7 +1260,7 @@ impl WindowsWindowInner {
+         };
+ 
+         unsafe { ScreenToClient(handle, &mut cursor_point).ok().log_err() };
+-        if self.is_resizable
++        if self.is_resizable.get()
+             && !self.state.is_maximized()
+             && 0 <= cursor_point.y
+             && cursor_point.y <= frame_y
+@@ -1213,12 +1390,12 @@ impl WindowsWindowInner {
+             && let Some(last_pressed) = last_pressed
+         {
+             let handled = match (wparam.0 as u32, last_pressed) {
+-                (HTMINBUTTON, HTMINBUTTON) if self.is_minimizable => {
++                (HTMINBUTTON, HTMINBUTTON) if self.is_minimizable.get() => {
+                     unsafe { ShowWindowAsync(handle, SW_MINIMIZE).ok().log_err() };
+                     true
+                 }
+                 (HTMINBUTTON, HTMINBUTTON) => true,
+-                (HTMAXBUTTON, HTMAXBUTTON) if self.is_resizable => {
++                (HTMAXBUTTON, HTMAXBUTTON) if self.is_maximizable() => {
+                     if self.state.is_maximized() {
+                         unsafe { ShowWindowAsync(handle, SW_NORMAL).ok().log_err() };
+                     } else {
+@@ -1951,3 +2128,29 @@ mod physical_key_tests {
+         assert_eq!(physical_key_from_lparam(LPARAM(0)), None);
+     }
+ }
++
++#[cfg(test)]
++mod native_window_input_tests {
++    use super::NativeModalLoops;
++    use windows::Win32::UI::WindowsAndMessaging::{
++        WM_ENTERMENULOOP, WM_ENTERSIZEMOVE, WM_EXITMENULOOP, WM_EXITSIZEMOVE,
++    };
++
++    #[test]
++    fn nested_menus_do_not_end_an_interactive_resize() {
++        let mut loops = NativeModalLoops::default();
++        loops.update(WM_ENTERMENULOOP);
++        assert!(loops.active());
++        assert!(!loops.in_size_move());
++        loops.update(WM_ENTERSIZEMOVE);
++        loops.update(WM_ENTERMENULOOP);
++        loops.update(WM_EXITMENULOOP);
++        loops.update(WM_EXITMENULOOP);
++        assert!(loops.active());
++        assert!(loops.in_size_move());
++        loops.update(WM_EXITSIZEMOVE);
++        assert!(!loops.active());
++        loops.update(WM_EXITMENULOOP);
++        assert!(!loops.active());
++    }
++}
+diff --git a/crates/gpui_windows/src/native_resize.rs b/crates/gpui_windows/src/native_resize.rs
+index 94f70769..47a35299 100644
+--- a/crates/gpui_windows/src/native_resize.rs
++++ b/crates/gpui_windows/src/native_resize.rs
+@@ -1,7 +1,157 @@
+ //! Bounded conversion between logical client sizes and native sizing rectangles.
++use gpui::{NativeResizeConstraint, Pixels, Size, px, size};
+ 
+ const MAX_EXTENT: i32 = 1 << 20;
+ 
++#[derive(Clone, Copy)]
++pub(crate) struct Geometry {
++    pub(crate) current: [i32; 4],
++    pub(crate) chrome: [i32; 2],
++    pub(crate) dpi: u32,
++}
++
++fn extent(rect: [i32; 4]) -> Option<[i32; 2]> {
++    let width = rect[2].checked_sub(rect[0])?;
++    let height = rect[3].checked_sub(rect[1])?;
++    ((1..=MAX_EXTENT).contains(&width) && (1..=MAX_EXTENT).contains(&height))
++        .then_some([width, height])
++}
++
++fn logical(value: Size<Pixels>) -> Option<[f64; 2]> {
++    let value = [
++        f32::from(value.width) as f64,
++        f32::from(value.height) as f64,
++    ];
++    value
++        .iter()
++        .all(|n| n.is_finite() && *n > 0.)
++        .then_some(value)
++}
++
++impl Geometry {
++    /// The limits describe the restored window. A client-decorated window has
++    /// no native chrome then; only while maximized is its client clipped
++    /// inside the outer frame.
++    pub(crate) fn measure(
++        outer: [i32; 4],
++        client: [i32; 2],
++        client_decorated: bool,
++        dpi: u32,
++    ) -> Option<Self> {
++        let chrome = if client_decorated {
++            [0, 0]
++        } else {
++            let [width, height] = extent(outer)?;
++            [
++                width.checked_sub(client[0])?,
++                height.checked_sub(client[1])?,
++            ]
++        };
++        Some(Self {
++            current: outer,
++            chrome,
++            dpi,
++        })
++    }
++
++    fn scale(self) -> Option<f64> {
++        (self.dpi > 0 && self.chrome.iter().all(|n| (0..MAX_EXTENT).contains(n)))
++            .then_some(self.dpi as f64 / 96.)
++    }
++
++    fn outer(self, client: Size<Pixels>) -> Option<[i32; 2]> {
++        let scale = self.scale()?;
++        let client = logical(client)?;
++        let mut outer = [0; 2];
++        for axis in 0..2 {
++            let physical = (client[axis] * scale).round();
++            if !physical.is_finite() || physical < 1. || physical > MAX_EXTENT as f64 {
++                return None;
++            }
++            outer[axis] = (physical as i32).checked_add(self.chrome[axis])?;
++            if outer[axis] > MAX_EXTENT {
++                return None;
++            }
++        }
++        Some(outer)
++    }
++
++    /// Native maximize bounds remain untouched; these are only tracking limits.
++    pub(crate) fn limits(self, policy: &NativeResizeConstraint) -> Option<([i32; 2], [i32; 2])> {
++        match policy {
++            NativeResizeConstraint::Fixed => extent(self.current).map(|size| (size, size)),
++            NativeResizeConstraint::Constrained {
++                minimum, maximum, ..
++            } => {
++                let min = logical(*minimum)?;
++                let max = logical(*maximum)?;
++                if (0..2).any(|axis| min[axis] > max[axis]) {
++                    return None;
++                }
++                Some((self.outer(*minimum)?, self.outer(*maximum)?))
++            }
++        }
++    }
++
++    pub(crate) fn constrain(
++        self,
++        proposed: [i32; 4],
++        edge: u32,
++        policy: &NativeResizeConstraint,
++    ) -> Option<[i32; 4]> {
++        if matches!(policy, NativeResizeConstraint::Fixed) {
++            return Some(self.current);
++        }
++        let NativeResizeConstraint::Constrained {
++            minimum,
++            maximum,
++            select,
++        } = policy
++        else {
++            unreachable!()
++        };
++        let scale = self.scale()?;
++        self.limits(policy)?;
++        let outer = extent(proposed)?;
++        let requested = [
++            outer[0].checked_sub(self.chrome[0])?,
++            outer[1].checked_sub(self.chrome[1])?,
++        ];
++        if requested.iter().any(|n| *n <= 0) {
++            return None;
++        }
++        let selected = select(size(
++            px((requested[0] as f64 / scale) as f32),
++            px((requested[1] as f64 / scale) as f32),
++        ))?;
++        let value = logical(selected)?;
++        let min = logical(*minimum)?;
++        let max = logical(*maximum)?;
++        if (0..2).any(|axis| value[axis] < min[axis] || value[axis] > max[axis]) {
++            return None;
++        }
++        anchor(proposed, edge, self.outer(selected)?)
++    }
++}
++
++/// WM_SIZING edges are stable Win32 constants; preserve each opposite edge.
++fn anchor(mut rect: [i32; 4], edge: u32, size: [i32; 2]) -> Option<[i32; 4]> {
++    if !(1..=8).contains(&edge) {
++        return None;
++    }
++    if matches!(edge, 1 | 4 | 7) {
++        rect[0] = rect[2].checked_sub(size[0])?;
++    } else {
++        rect[2] = rect[0].checked_add(size[0])?;
++    }
++    if matches!(edge, 3 | 4 | 5) {
++        rect[1] = rect[3].checked_sub(size[1])?;
++    } else {
++        rect[3] = rect[1].checked_add(size[1])?;
++    }
++    Some(rect)
++}
++
+ /// The outer size that keeps a client's logical size at a new DPI: the
+ /// client scaled by the DPI ratio, plus `chrome` measured at the new DPI.
+ pub(crate) fn dpi_scaled_size(
+@@ -94,6 +244,107 @@ impl DpiResize {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    use std::rc::Rc;
++
++    fn grid() -> NativeResizeConstraint {
++        NativeResizeConstraint::Constrained {
++            minimum: size(px(100.), px(80.)),
++            maximum: size(px(500.), px(400.)),
++            select: Rc::new(|requested| {
++                Some(size(
++                    px((f32::from(requested.width) / 20.).round().clamp(5., 25.) * 20.),
++                    px((f32::from(requested.height) / 20.).round().clamp(4., 20.) * 20.),
++                ))
++            }),
++        }
++    }
++
++    #[test]
++    fn increments_and_chrome_use_current_dpi_at_negative_monitor_origins() {
++        for dpi in [96, 120, 144, 192] {
++            let geometry = Geometry {
++                current: [-2000, -700, -1500, -300],
++                chrome: [18, 40],
++                dpi,
++            };
++            let requested = [-1800, -600, -1391, -279];
++            let selected = geometry.constrain(requested, 8, &grid()).unwrap();
++            let logical = [
++                (selected[2] - selected[0] - 18) as f64 * 96. / dpi as f64,
++                (selected[3] - selected[1] - 40) as f64 * 96. / dpi as f64,
++            ];
++            assert_eq!(selected[..2], requested[..2]);
++            assert_eq!(logical[0] % 20., 0.);
++            assert_eq!(logical[1] % 20., 0.);
++        }
++    }
++
++    #[test]
++    fn a_maximized_client_decorated_window_restores_to_its_minimum() {
++        let minimum = size(px(360.), px(616.));
++        let policy = NativeResizeConstraint::Constrained {
++            minimum,
++            maximum: size(px(4000.), px(4000.)),
++            select: Rc::new(Some),
++        };
++        // At 200 %, maximized: the outer frame overhangs the client by 13 px.
++        let maximized = [-13, -13, 3469, 2085];
++        let client = [3456, 2072];
++        let restored = Geometry::measure(maximized, client, true, 192).unwrap();
++        assert_eq!(restored.limits(&policy).unwrap().0, [720, 1232]);
++        let framed = Geometry::measure(maximized, client, false, 192).unwrap();
++        assert_eq!(framed.limits(&policy).unwrap().0, [746, 1258]);
++    }
++
++    #[test]
++    fn every_edge_preserves_its_opposite_anchor() {
++        let original = [-1000, -600, -500, -200];
++        for edge in 1..=8 {
++            let adjusted = anchor(original, edge, [300, 240]).unwrap();
++            assert_eq!(adjusted[2] - adjusted[0], 300);
++            assert_eq!(adjusted[3] - adjusted[1], 240);
++            let x = if matches!(edge, 1 | 4 | 7) { 2 } else { 0 };
++            let y = if matches!(edge, 3 | 4 | 5) { 3 } else { 1 };
++            assert_eq!(adjusted[x], original[x]);
++            assert_eq!(adjusted[y], original[y]);
++        }
++        assert!(anchor(original, 0, [300, 240]).is_none());
++        assert!(anchor([i32::MAX - 2, 0, i32::MAX, 20], 2, [30, 20]).is_none());
++    }
++
++    #[test]
++    fn invalid_or_conflicting_policy_refuses_resize_and_fixed_keeps_current_bounds() {
++        let geometry = Geometry {
++            current: [10, 20, 210, 180],
++            chrome: [0, 0],
++            dpi: 96,
++        };
++        assert_eq!(
++            geometry.constrain([0, 0, 800, 600], 8, &NativeResizeConstraint::Fixed),
++            Some(geometry.current)
++        );
++        assert_eq!(
++            geometry.limits(&NativeResizeConstraint::Fixed),
++            Some(([200, 160], [200, 160]))
++        );
++        for (min, max, selected) in [
++            (500., 100., 200.),
++            (100., 500., f32::NAN),
++            (100., 500., 600.),
++        ] {
++            let policy = NativeResizeConstraint::Constrained {
++                minimum: size(px(min), px(min)),
++                maximum: size(px(max), px(max)),
++                select: Rc::new(move |_| Some(size(px(selected), px(selected)))),
++            };
++            assert!(geometry.constrain([0, 0, 300, 300], 8, &policy).is_none());
++        }
++        assert!(
++            Geometry { dpi: 0, ..geometry }
++                .constrain([0, 0, 300, 300], 8, &grid())
++                .is_none()
++        );
++    }
+ 
+     #[test]
+     fn a_dpi_change_keeps_the_client_size_and_measures_the_frame_anew() {
+diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
+index 2f1240c0..041a58e0 100644
+--- a/crates/gpui_windows/src/window.rs
++++ b/crates/gpui_windows/src/window.rs
+@@ -32,8 +32,76 @@ use crate::direct_manipulation::DirectManipulationHandler;
+ use crate::*;
+ use gpui::*;
+ 
++#[path = "window_state.rs"]
++mod window_state;
++use window_state::WindowOpenState;
++#[path = "client_frame.rs"]
++pub(crate) mod client_frame;
++
+ pub(crate) struct WindowsWindow(pub Rc<WindowsWindowInner>);
+ 
++fn window_control_style(
++    style: WINDOW_STYLE,
++    resizable: bool,
++    minimizable: bool,
++    maximizable: bool,
++) -> WINDOW_STYLE {
++    let mut style = style & !(WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX);
++    if resizable {
++        style |= WS_THICKFRAME;
++    }
++    if maximizable {
++        style |= WS_MAXIMIZEBOX;
++    }
++    if minimizable {
++        style |= WS_MINIMIZEBOX;
++    }
++    style
++}
++
++fn initial_show_command(focus: bool) -> SHOW_WINDOW_CMD {
++    if focus {
++        SW_SHOWNORMAL
++    } else {
++        SW_SHOWNOACTIVATE
++    }
++}
++
++fn initial_window_styles(
++    kind: WindowKind,
++    hide_title_bar: bool,
++    resizable: bool,
++    minimizable: bool,
++) -> (WINDOW_EX_STYLE, WINDOW_STYLE) {
++    if kind == WindowKind::PopUp {
++        return (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WINDOW_STYLE(0x0));
++    }
++    let mut style = window_control_style(WS_SYSMENU, resizable, minimizable, resizable);
++    let extended = if kind == WindowKind::Dialog {
++        style |= WS_POPUP | WS_CAPTION;
++        WS_EX_DLGMODALFRAME
++    } else {
++        if !hide_title_bar {
++            style |= WS_CAPTION;
++        }
++        WS_EX_APPWINDOW
++    };
++    (extended, style)
++}
++
++fn resize_hit_test(edge: ResizeEdge) -> u32 {
++    match edge {
++        ResizeEdge::Top => HTTOP,
++        ResizeEdge::TopRight => HTTOPRIGHT,
++        ResizeEdge::Right => HTRIGHT,
++        ResizeEdge::BottomRight => HTBOTTOMRIGHT,
++        ResizeEdge::Bottom => HTBOTTOM,
++        ResizeEdge::BottomLeft => HTBOTTOMLEFT,
++        ResizeEdge::Left => HTLEFT,
++        ResizeEdge::TopLeft => HTTOPLEFT,
++    }
++}
++
+ impl std::ops::Deref for WindowsWindow {
+     type Target = WindowsWindowInner;
+ 
+@@ -46,10 +114,12 @@ pub struct WindowsWindowState {
+     pub origin: Cell<Point<Pixels>>,
+     pub logical_size: Cell<Size<Pixels>>,
+     pub min_size: Option<Size<Pixels>>,
++    pub(crate) resize_constraint: RefCell<Option<NativeResizeConstraint>>,
+     pub fullscreen_restore_bounds: Cell<Bounds<Pixels>>,
+     pub border_offset: WindowBorderOffset,
+     pub appearance: Cell<WindowAppearance>,
+     pub background_appearance: Cell<WindowBackgroundAppearance>,
++    pub(crate) decorations: Cell<WindowDecorations>,
+     pub scale_factor: Cell<f32>,
+     pub restore_from_minimized: Cell<Option<Box<dyn FnMut(RequestFrameOptions)>>>,
+ 
+@@ -61,6 +131,8 @@ pub struct WindowsWindowState {
+     pub last_reported_modifiers: Cell<Option<Modifiers>>,
+     pub last_reported_capslock: Cell<Option<Capslock>>,
+     pub hovered: Cell<bool>,
++    pub(crate) modal_loops: Cell<NativeModalLoops>,
++    pub(crate) closing: Cell<bool>,
+     pub last_visibility: Cell<Option<WindowVisibility>>,
+     pub direct_manipulation: DirectManipulationHandler,
+ 
+@@ -100,9 +172,12 @@ pub(crate) struct WindowsWindowInner {
+     system_settings: WindowsSystemSettings,
+     pub(crate) handle: AnyWindowHandle,
+     pub(crate) hide_title_bar: bool,
++    pending_decorations: Cell<Option<WindowDecorations>>,
+     pub(crate) is_movable: bool,
+-    pub(crate) is_resizable: bool,
+-    pub(crate) is_minimizable: bool,
++    pub(crate) is_resizable: Cell<bool>,
++    pub(crate) is_minimizable: Cell<bool>,
++    maximizable: Cell<Option<bool>>,
++    pending_maximize: Cell<Option<bool>>,
+     pub(crate) dpi_resize: Cell<Option<crate::native_resize::DpiResize>>,
+     pub(crate) executor: ForegroundExecutor,
+     pub(crate) validation_number: usize,
+@@ -116,6 +191,7 @@ impl WindowsWindowState {
+         hwnd: HWND,
+         directx_devices: &DirectXDevices,
+         window_params: &CREATESTRUCTW,
++        decorations: WindowDecorations,
+         current_cursor: Option<HCURSOR>,
+         cursor_visible: Arc<AtomicBool>,
+         display: WindowsDisplay,
+@@ -166,9 +242,11 @@ impl WindowsWindowState {
+             border_offset,
+             appearance: Cell::new(appearance),
+             background_appearance: Cell::new(WindowBackgroundAppearance::Opaque),
++            decorations: Cell::new(decorations),
+             scale_factor: Cell::new(scale_factor),
+             restore_from_minimized: Cell::new(restore_from_minimized),
+             min_size,
++            resize_constraint: RefCell::new(None),
+             callbacks,
+             frame_signal: Arc::new(PlatformFrameSignal::new()),
+             input_handler: Cell::new(input_handler),
+@@ -177,6 +255,8 @@ impl WindowsWindowState {
+             last_reported_modifiers: Cell::new(last_reported_modifiers),
+             last_reported_capslock: Cell::new(last_reported_capslock),
+             hovered: Cell::new(hovered),
++            modal_loops: Cell::new(NativeModalLoops::default()),
++            closing: Cell::new(false),
+             last_visibility: Cell::new(None),
+             renderer: RefCell::new(renderer),
+             force_render_pending: Cell::new(false),
+@@ -223,10 +303,19 @@ impl WindowsWindowState {
+                 .log_err();
+             placement
+         };
++        // rcNormalPosition describes the restored window, not the current
++        // maximized client clipped to the work area. Full-client normal
++        // windows have no native insets regardless of their current state.
++        let client_border = WindowBorderOffset::default();
++        let normal_border = if self.decorations.get() == WindowDecorations::Client {
++            &client_border
++        } else {
++            &self.border_offset
++        };
+         (
+             calculate_client_rect(
+                 placement.rcNormalPosition,
+-                &self.border_offset,
++                normal_border,
+                 self.scale_factor.get(),
+             ),
+             placement.showCmd == SW_SHOWMAXIMIZED.0 as u32,
+@@ -255,6 +344,92 @@ impl WindowsWindowState {
+ }
+ 
+ impl WindowsWindowInner {
++    pub(crate) fn native_handle(&self) -> HWND {
++        self.hwnd
++    }
++
++    pub(crate) fn is_maximizable(&self) -> bool {
++        self.maximizable.get().unwrap_or(self.is_resizable.get())
++    }
++
++    fn update_window_controls(self: &Rc<Self>) {
++        let this = self.clone();
++        self.executor
++            .spawn(async move {
++                if this.state.closing.get() {
++                    return;
++                }
++                if let Some(mut restore) = this.state.fullscreen.get() {
++                    restore.style = window_control_style(
++                        restore.style,
++                        this.is_resizable.get(),
++                        this.is_minimizable.get(),
++                        this.is_maximizable(),
++                    );
++                    this.state.fullscreen.set(Some(restore));
++                    return;
++                }
++                unsafe {
++                    let previous = WINDOW_STYLE(get_window_long(this.hwnd, GWL_STYLE) as u32);
++                    let style = window_control_style(
++                        previous,
++                        this.is_resizable.get(),
++                        this.is_minimizable.get(),
++                        this.is_maximizable(),
++                    );
++                    if style != previous {
++                        set_window_long(this.hwnd, GWL_STYLE, style.0 as isize);
++                        SetWindowPos(
++                            this.hwnd,
++                            None,
++                            0,
++                            0,
++                            0,
++                            0,
++                            SWP_FRAMECHANGED
++                                | SWP_NOMOVE
++                                | SWP_NOSIZE
++                                | SWP_NOACTIVATE
++                                | SWP_NOZORDER,
++                        )
++                        .log_err();
++                    }
++                }
++            })
++            .detach();
++    }
++
++    fn start_native_drag(self: &Rc<Self>, hit_test: u32) {
++        let this = self.clone();
++        self.executor
++            .spawn(async move {
++                if this.state.closing.get()
++                    || this.state.is_fullscreen()
++                    || (hit_test == HTCAPTION && !this.is_movable)
++                    || (hit_test != HTCAPTION
++                        && (!this.is_resizable.get() || this.state.is_maximized()))
++                {
++                    return;
++                }
++                unsafe {
++                    let mut position = POINT::default();
++                    if GetCursorPos(&mut position).is_err() {
++                        return;
++                    }
++                    ReleaseCapture().log_err();
++                    DefWindowProcW(
++                        this.hwnd,
++                        WM_NCLBUTTONDOWN,
++                        WPARAM(hit_test as usize),
++                        LPARAM(
++                            ((position.y as u16 as u32) << 16 | position.x as u16 as u32) as isize,
++                        ),
++                    );
++                }
++            })
++            .detach();
++    }
++
+     /// Whether the window is being presented: shown and not minimized. Windows
+     /// has no notification for a window fully covered by other windows, so
+     /// that case reports `Visible`.
+@@ -273,6 +448,7 @@ impl WindowsWindowInner {
+             hwnd,
+             &context.directx_devices,
+             cs,
++            context.decorations,
+             context.current_cursor,
+             context.cursor_visible.clone(),
+             context.display,
+@@ -290,9 +466,12 @@ impl WindowsWindowInner {
+             state,
+             handle: context.handle,
+             hide_title_bar: context.hide_title_bar,
++            pending_decorations: Cell::new(None),
+             is_movable: context.is_movable,
+-            is_resizable: context.is_resizable,
+-            is_minimizable: context.is_minimizable,
++            is_resizable: Cell::new(context.is_resizable),
++            is_minimizable: Cell::new(context.is_minimizable),
++            maximizable: Cell::new(None),
++            pending_maximize: Cell::new(None),
+             dpi_resize: Cell::new(None),
+             executor: context.executor.clone(),
+             validation_number: context.validation_number,
+@@ -416,6 +595,7 @@ struct WindowCreateContext {
+     inner: Option<Result<Rc<WindowsWindowInner>>>,
+     handle: AnyWindowHandle,
+     hide_title_bar: bool,
++    decorations: WindowDecorations,
+     display: WindowsDisplay,
+     is_movable: bool,
+     is_resizable: bool,
+@@ -491,27 +671,12 @@ impl WindowsWindow {
+                 .unwrap_or(""),
+         );
+ 
+-        let (mut dwexstyle, dwstyle) = if params.kind == WindowKind::PopUp {
+-            (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WINDOW_STYLE(0x0))
+-        } else {
+-            let mut dwstyle = WS_SYSMENU;
+-
+-            if params.is_resizable {
+-                dwstyle |= WS_THICKFRAME | WS_MAXIMIZEBOX;
+-            }
+-
+-            if params.is_minimizable {
+-                dwstyle |= WS_MINIMIZEBOX;
+-            }
+-            let dwexstyle = if params.kind == WindowKind::Dialog {
+-                dwstyle |= WS_POPUP | WS_CAPTION;
+-                WS_EX_DLGMODALFRAME
+-            } else {
+-                WS_EX_APPWINDOW
+-            };
+-
+-            (dwexstyle, dwstyle)
+-        };
++        let (mut dwexstyle, dwstyle) = initial_window_styles(
++            params.kind,
++            hide_title_bar,
++            params.is_resizable,
++            params.is_minimizable,
++        );
+         if !disable_direct_composition {
+             dwexstyle |= WS_EX_NOREDIRECTIONBITMAP;
+         }
+@@ -529,6 +694,7 @@ impl WindowsWindow {
+             inner: None,
+             handle,
+             hide_title_bar,
++            decorations: params.window_decorations,
+             display,
+             is_movable: params.is_movable,
+             is_resizable: params.is_resizable,
+@@ -575,13 +741,12 @@ impl WindowsWindow {
+         set_non_rude_hwnd(hwnd, true);
+         configure_dwm_dark_mode(hwnd, appearance);
+         this.state.border_offset.update(hwnd)?;
+-        let placement =
++        let mut placement =
+             retrieve_window_placement(hwnd, display, params.bounds, &this.state.border_offset)?;
++        // A newly created HWND reports SW_HIDE. The requested show policy, not
++        // that initial native state, determines its first presentation.
++        placement.showCmd = initial_show_command(params.focus).0 as u32;
+         if params.show {
+-            let mut placement = placement;
+-            if !params.focus {
+-                placement.showCmd = SW_SHOWNOACTIVATE.0 as u32;
+-            }
+             unsafe { SetWindowPlacement(hwnd, &placement)? };
+         } else {
+             this.state.initial_placement.set(Some(WindowOpenStatus {
+@@ -612,6 +777,8 @@ impl rwh::HasDisplayHandle for WindowsWindow {
+ 
+ impl Drop for WindowsWindow {
+     fn drop(&mut self) {
++        self.0.state.closing.set(true);
++        self.0.state.resize_constraint.borrow_mut().take();
+         self.0.dialog_owner.close();
+         unsafe { ShowWindowAsync(self.0.hwnd, SW_HIDE).ok().log_err() };
+         // `DestroyWindow` below sends `WM_SHOWWINDOW`; without a callback the
+@@ -640,6 +807,107 @@ impl Drop for WindowsWindow {
+ }
+ 
+ impl PlatformWindow for WindowsWindow {
++    fn window_decorations(&self) -> Decorations {
++        match self.state.decorations.get() {
++            WindowDecorations::Server => Decorations::Server,
++            WindowDecorations::Client => Decorations::Client {
++                tiling: if self.state.is_maximized() || self.state.is_fullscreen() {
++                    Tiling::tiled()
++                } else {
++                    Tiling::default()
++                },
++            },
++        }
++    }
++
++    fn request_decorations(&self, decorations: WindowDecorations) {
++        if self.state.closing.get()
++            || (self.state.decorations.get() == decorations
++                && self.pending_decorations.get().is_none())
++        {
++            return;
++        }
++        if self
++            .pending_decorations
++            .replace(Some(decorations))
++            .is_some()
++        {
++            return;
++        }
++        let weak = Rc::downgrade(&self.0);
++        self.executor
++            .spawn(async move {
++                let Some(this) = weak.upgrade().filter(|this| !this.state.closing.get()) else {
++                    return;
++                };
++                let Some(decorations) = this.pending_decorations.take() else {
++                    return;
++                };
++                let previous = this.state.decorations.replace(decorations);
++                if previous == decorations {
++                    return;
++                }
++                // A hidden first placement stores an outer rectangle. Preserve its
++                // requested client extent when the frame policy changes before show.
++                let pending = this.state.initial_placement.take().map(|status| {
++                    let client = calculate_client_rect(
++                        status.placement.rcNormalPosition,
++                        &this.state.border_offset,
++                        this.state.scale_factor.get(),
++                    )
++                    .to_device_pixels(this.state.scale_factor.get());
++                    (status, client)
++                });
++                let changed = unsafe {
++                    SetWindowPos(
++                        this.hwnd,
++                        None,
++                        0,
++                        0,
++                        0,
++                        0,
++                        SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
++                    )
++                }
++                .context("changing window decorations")
++                .and_then(|_| this.state.border_offset.update(this.hwnd));
++                if let Err(error) = changed {
++                    this.state.decorations.set(previous);
++                    if let Some((status, _)) = pending {
++                        this.state.initial_placement.set(Some(status));
++                    }
++                    // A failed native call may have delivered some messages. Put
++                    // the previous calculation policy back before retrying it.
++                    unsafe {
++                        SetWindowPos(
++                            this.hwnd,
++                            None,
++                            0,
++                            0,
++                            0,
++                            0,
++                            SWP_FRAMECHANGED
++                                | SWP_NOMOVE
++                                | SWP_NOSIZE
++                                | SWP_NOACTIVATE
++                                | SWP_NOZORDER,
++                        )
++                    }
++                    .context("restoring window decorations after failure")
++                    .log_err();
++                    this.state.border_offset.update(this.hwnd).log_err();
++                    log::error!("Cannot change window decorations: {error:#}");
++                    return;
++                }
++                if let Some((mut status, client)) = pending {
++                    status.placement.rcNormalPosition =
++                        calculate_window_rect(client, &this.state.border_offset);
++                    this.state.initial_placement.set(Some(status));
++                }
++            })
++            .detach();
++    }
++
+     fn bounds(&self) -> Bounds<Pixels> {
+         self.state.bounds()
+     }
+@@ -661,22 +929,38 @@ impl PlatformWindow for WindowsWindow {
+     }
+ 
+     fn resize(&mut self, size: Size<Pixels>) {
+-        let hwnd = self.0.hwnd;
+-        let bounds = gpui::bounds(self.bounds().origin, size).to_device_pixels(self.scale_factor());
+-        let rect = calculate_window_rect(bounds, &self.state.border_offset);
+-
++        let this = self.0.clone();
+         self.0
+             .executor
+             .spawn(async move {
++                if this.state.closing.get() {
++                    return;
++                }
++                // First show, a style change, or a DPI transition may have
++                // changed the nonclient extent since the cached measurement.
++                // Measure on the UI thread immediately before applying the
++                // requested client size, after earlier queued style updates.
++                if this
++                    .state
++                    .border_offset
++                    .update(this.hwnd)
++                    .log_err()
++                    .is_none()
++                {
++                    return;
++                }
++                let bounds = gpui::bounds(this.state.bounds().origin, size)
++                    .to_device_pixels(this.state.scale_factor.get());
++                let rect = calculate_window_rect(bounds, &this.state.border_offset);
+                 unsafe {
+                     SetWindowPos(
+-                        hwnd,
++                        this.hwnd,
+                         None,
+                         bounds.origin.x.0,
+                         bounds.origin.y.0,
+                         rect.right - rect.left,
+                         rect.bottom - rect.top,
+-                        SWP_NOMOVE,
++                        SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+                     )
+                     .context("unable to set window content size")
+                     .log_err();
+@@ -956,12 +1240,189 @@ impl PlatformWindow for WindowsWindow {
+         unsafe { ShowWindowAsync(self.0.hwnd, SW_MINIMIZE).ok().log_err() };
+     }
+ 
++    fn set_resizable(&self, resizable: bool) {
++        if self.is_resizable.replace(resizable) != resizable {
++            self.0.update_window_controls();
++        }
++    }
++
++    fn set_maximizable(&self, maximizable: bool) {
++        if self.maximizable.replace(Some(maximizable)) != Some(maximizable) {
++            self.0.update_window_controls();
++        }
++    }
++
++    fn set_maximized(&self, maximized: bool) {
++        if self.state.closing.get()
++            || self.state.is_fullscreen()
++            || self.state.modal_loops.get().in_size_move()
++            || unsafe { IsIconic(self.hwnd).as_bool() }
++        {
++            self.pending_maximize.set(None);
++            return;
++        }
++        if !unsafe { IsWindowVisible(self.hwnd).as_bool() }
++            && let Some(mut status) = self.state.initial_placement.take()
++        {
++            if status.state != WindowOpenState::Fullscreen {
++                status.state = if maximized {
++                    WindowOpenState::Maximized
++                } else {
++                    WindowOpenState::Windowed
++                };
++            }
++            self.state.initial_placement.set(Some(status));
++            return;
++        }
++        if self.pending_maximize.replace(Some(maximized)).is_some() {
++            return;
++        }
++        let this = Rc::downgrade(&self.0);
++        self.executor
++            .spawn(async move {
++                let Some(this) = this.upgrade() else {
++                    return;
++                };
++                let Some(maximized) = this.pending_maximize.take() else {
++                    return;
++                };
++                if this.state.closing.get()
++                    || this.state.is_fullscreen()
++                    || this.state.modal_loops.get().in_size_move()
++                    || unsafe {
++                        IsIconic(this.hwnd).as_bool() || !IsWindowVisible(this.hwnd).as_bool()
++                    }
++                {
++                    return;
++                }
++                if this.state.is_maximized() != maximized {
++                    // Synchronous on its UI thread, outside GPUI borrows. A later
++                    // opposite request cannot overtake an unprocessed async show.
++                    let _was_visible = unsafe {
++                        ShowWindow(
++                            this.hwnd,
++                            if maximized {
++                                SW_MAXIMIZE
++                            } else {
++                                SW_SHOWNOACTIVATE
++                            },
++                        )
++                    };
++                }
++            })
++            .detach();
++    }
++
++    fn set_minimizable(&self, minimizable: bool) {
++        if self.is_minimizable.replace(minimizable) != minimizable {
++            self.0.update_window_controls();
++        }
++    }
++
++    fn is_in_live_resize(&self) -> bool {
++        self.state.modal_loops.get().in_size_move()
++    }
++
++    fn start_window_move(&self) {
++        if self.is_movable && !self.state.is_fullscreen() {
++            self.0.start_native_drag(HTCAPTION);
++        }
++    }
++
++    fn start_window_resize(&self, edge: ResizeEdge) {
++        if self.is_resizable.get() && !self.state.is_fullscreen() && !self.state.is_maximized() {
++            self.0.start_native_drag(resize_hit_test(edge));
++        }
++    }
++
++    fn show_window_menu(&self, position: Point<Pixels>) {
++        let this = self.0.clone();
++        // Native menus and move/resize run modal loops. Enter them after GPUI
++        // releases its window update so their callbacks may safely re-enter.
++        self.executor
++            .spawn(async move {
++                if this.state.closing.get() {
++                    return;
++                }
++                let scale = this.state.scale_factor.get();
++                let mut position = POINT {
++                    x: (position.x.as_f32() * scale).round() as i32,
++                    y: (position.y.as_f32() * scale).round() as i32,
++                };
++                unsafe {
++                    if !ClientToScreen(this.hwnd, &mut position).as_bool() {
++                        return;
++                    }
++                    let menu = GetSystemMenu(this.hwnd, false);
++                    if menu.is_invalid() {
++                        return;
++                    }
++                    let maximized = this.state.is_maximized();
++                    let fullscreen = this.state.is_fullscreen();
++                    for (command, enabled) in [
++                        (SC_MOVE, this.is_movable && !maximized && !fullscreen),
++                        (
++                            SC_SIZE,
++                            this.is_resizable.get() && !maximized && !fullscreen,
++                        ),
++                        (SC_MINIMIZE, this.is_minimizable.get()),
++                        (
++                            SC_MAXIMIZE,
++                            this.is_maximizable() && !maximized && !fullscreen,
++                        ),
++                        (SC_RESTORE, maximized || IsIconic(this.hwnd).as_bool()),
++                    ] {
++                        let _ = EnableMenuItem(
++                            menu,
++                            command,
++                            MF_BYCOMMAND | if enabled { MF_ENABLED } else { MF_GRAYED },
++                        );
++                    }
++                    let command = TrackPopupMenu(
++                        menu,
++                        TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
++                        position.x,
++                        position.y,
++                        None,
++                        this.hwnd,
++                        None,
++                    );
++                    if command.0 != 0 && !this.state.closing.get() {
++                        PostMessageW(
++                            Some(this.hwnd),
++                            WM_SYSCOMMAND,
++                            WPARAM(command.0 as usize),
++                            LPARAM(0),
++                        )
++                        .log_err();
++                    }
++                }
++            })
++            .detach();
++    }
++
++    fn set_native_resize_constraint(&self, constraint: Option<NativeResizeConstraint>) {
++        if !self.state.closing.get() {
++            *self.state.resize_constraint.borrow_mut() = constraint;
++        }
++    }
++
+     fn zoom(&self) {
++        if self.state.is_fullscreen() {
++            return;
++        }
+         unsafe {
+             if IsWindowVisible(self.0.hwnd).as_bool() {
+-                ShowWindowAsync(self.0.hwnd, SW_MAXIMIZE).ok().log_err();
++                // The OS owns its restore rectangle, including Snap and the
++                // workspace origin. Do not restore it with SetWindowPos.
++                let command = if self.state.is_maximized() {
++                    SW_RESTORE
++                } else {
++                    SW_MAXIMIZE
++                };
++                ShowWindowAsync(self.0.hwnd, command).ok().log_err();
+             } else if let Some(mut status) = self.state.initial_placement.take() {
+-                status.state = WindowOpenState::Maximized;
++                status.state = status.state.toggle_zoom();
+                 self.state.initial_placement.set(Some(status));
+             }
+         }
+@@ -1426,13 +1887,6 @@ struct WindowOpenStatus {
+     state: WindowOpenState,
+ }
+ 
+-#[derive(Clone, Copy)]
+-enum WindowOpenState {
+-    Maximized,
+-    Fullscreen,
+-    Windowed,
+-}
+-
+ const WINDOW_CLASS_NAME: PCWSTR = w!("Zed::Window");
+ 
+ fn register_window_class(icon_handle: HICON) {
+@@ -1697,9 +2151,84 @@ fn set_non_rude_hwnd(hwnd: HWND, non_rude: bool) {
+ 
+ #[cfg(test)]
+ mod tests {
+-    use super::ClickState;
+-    use gpui::{DevicePixels, MouseButton, point};
++    use super::{
++        ClickState, initial_show_command, initial_window_styles, resize_hit_test,
++        window_control_style,
++    };
++    use gpui::{DevicePixels, MouseButton, ResizeEdge, WindowKind, point};
+     use std::time::Duration;
++    use windows::Win32::UI::WindowsAndMessaging::*;
++
++    #[test]
++    fn first_show_uses_requested_activation_instead_of_hidden_placement() {
++        assert_eq!(initial_show_command(true), SW_SHOWNORMAL);
++        assert_eq!(initial_show_command(false), SW_SHOWNOACTIVATE);
++    }
++
++    #[test]
++    fn normal_windows_get_only_the_title_bar_they_requested() {
++        let controls = WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX;
++        assert_eq!(
++            initial_window_styles(WindowKind::Normal, false, true, true),
++            (WS_EX_APPWINDOW, controls | WS_CAPTION),
++        );
++        assert_eq!(
++            initial_window_styles(WindowKind::Normal, true, true, true),
++            (WS_EX_APPWINDOW, controls),
++        );
++        assert_eq!(
++            initial_window_styles(WindowKind::PopUp, false, true, true),
++            (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WINDOW_STYLE(0)),
++        );
++    }
++
++    #[test]
++    fn runtime_controls_preserve_unrelated_window_styles() {
++        let base = WS_CAPTION | WS_SYSMENU | WS_POPUP | WS_VISIBLE;
++        let enabled = window_control_style(base, true, true, true);
++        assert_eq!(
++            enabled,
++            base | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX
++        );
++        assert_eq!(
++            window_control_style(enabled, false, true, false),
++            base | WS_MINIMIZEBOX
++        );
++        assert_eq!(
++            window_control_style(enabled, true, false, true),
++            base | WS_THICKFRAME | WS_MAXIMIZEBOX
++        );
++        assert_eq!(window_control_style(enabled, false, false, false), base);
++    }
++
++    #[test]
++    fn maximize_permission_is_independent_of_resize() {
++        let base = WS_CAPTION | WS_SYSMENU | WS_VISIBLE;
++        assert_eq!(
++            window_control_style(base, true, true, false),
++            base | WS_THICKFRAME | WS_MINIMIZEBOX
++        );
++        assert_eq!(
++            window_control_style(base, false, false, true),
++            base | WS_MAXIMIZEBOX
++        );
++    }
++
++    #[test]
++    fn resize_edges_use_native_screen_directions() {
++        for (edge, hit) in [
++            (ResizeEdge::Top, HTTOP),
++            (ResizeEdge::TopRight, HTTOPRIGHT),
++            (ResizeEdge::Right, HTRIGHT),
++            (ResizeEdge::BottomRight, HTBOTTOMRIGHT),
++            (ResizeEdge::Bottom, HTBOTTOM),
++            (ResizeEdge::BottomLeft, HTBOTTOMLEFT),
++            (ResizeEdge::Left, HTLEFT),
++            (ResizeEdge::TopLeft, HTTOPLEFT),
++        ] {
++            assert_eq!(resize_hit_test(edge), hit);
++        }
++    }
+ 
+     #[test]
+     fn test_double_click_interval() {
+diff --git a/crates/gpui_windows/src/window_state.rs b/crates/gpui_windows/src/window_state.rs
+new file mode 100644
+index 00000000..6c449f16
+--- /dev/null
++++ b/crates/gpui_windows/src/window_state.rs
+@@ -0,0 +1,37 @@
++//! Native zoom changes show state; the OS retains the ordinary restore rectangle.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) enum WindowOpenState {
++    Maximized,
++    Fullscreen,
++    Windowed,
++}
++
++impl WindowOpenState {
++    pub(super) fn toggle_zoom(self) -> Self {
++        match self {
++            Self::Windowed => Self::Maximized,
++            Self::Maximized => Self::Windowed,
++            Self::Fullscreen => Self::Fullscreen,
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::WindowOpenState;
++
++    #[test]
++    fn repeated_zoom_restores_the_native_windowed_state() {
++        let maximized = WindowOpenState::Windowed.toggle_zoom();
++        assert_eq!(maximized, WindowOpenState::Maximized);
++        assert_eq!(maximized.toggle_zoom(), WindowOpenState::Windowed);
++    }
++
++    #[test]
++    fn pending_fullscreen_keeps_its_show_intent() {
++        assert_eq!(
++            WindowOpenState::Fullscreen.toggle_zoom(),
++            WindowOpenState::Fullscreen
++        );
++    }
++}

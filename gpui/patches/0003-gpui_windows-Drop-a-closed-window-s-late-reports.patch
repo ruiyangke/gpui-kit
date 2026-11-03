@@ -14,10 +14,10 @@ Remove when upstream gpui_windows drops them on close.
  1 file changed, 6 insertions(+)
 
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index 95e45116..a0b7819d 100644
+index 64661087..767f537a 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
-@@ -851,6 +851,12 @@ impl Drop for WindowsWindow {
+@@ -615,6 +615,12 @@ impl Drop for WindowsWindow {
          // `DestroyWindow` below sends `WM_SHOWWINDOW`; without a callback the
          // resulting visibility report has nothing to notify.
          self.0.state.callbacks.visibility_change.take();

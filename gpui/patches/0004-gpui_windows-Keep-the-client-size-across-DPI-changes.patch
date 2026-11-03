@@ -12,17 +12,19 @@ size it would have scaled it to; keep the answer then.
 
 Remove when upstream gpui_windows handles WM_GETDPISCALEDSIZE.
 ---
- crates/gpui_windows/src/events.rs        |  79 ++++++++++++
- crates/gpui_windows/src/native_resize.rs | 148 +++++++++++++++++++++++
+ crates/gpui_windows/src/events.rs        |  75 +++++++++++
+ crates/gpui_windows/src/gpui_windows.rs  |   1 +
+ crates/gpui_windows/src/native_resize.rs | 156 +++++++++++++++++++++++
  crates/gpui_windows/src/window.rs        |   2 +
- 3 files changed, 229 insertions(+)
+ 4 files changed, 234 insertions(+)
+ create mode 100644 crates/gpui_windows/src/native_resize.rs
 
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 3e4d364e..c8a76ce9 100644
+index 996fcdb7..9cbefbda 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
-@@ -245,6 +245,8 @@ impl WindowsWindowInner {
-             }
+@@ -102,6 +102,8 @@ impl WindowsWindowInner {
+             WM_EXITSIZEMOVE | WM_EXITMENULOOP => self.handle_size_move_loop_exit(handle),
              WM_TIMER => self.handle_timer_msg(handle, wparam),
              WM_NCCALCSIZE => self.handle_calc_client_size(handle, wparam, lparam),
 +            WM_GETDPISCALEDSIZE => self.handle_get_dpi_scaled_size_msg(handle, wparam, lparam),
@@ -30,7 +32,7 @@ index 3e4d364e..c8a76ce9 100644
              WM_DPICHANGED => self.handle_dpi_changed_msg(handle, wparam, lparam),
              WM_DISPLAYCHANGE => self.handle_display_change_msg(handle),
              WM_NCHITTEST => self.handle_hit_test_msg(handle, lparam),
-@@ -1303,6 +1305,83 @@ impl WindowsWindowInner {
+@@ -871,6 +873,79 @@ impl WindowsWindowInner {
          }
      }
  
@@ -56,18 +58,14 @@ index 3e4d364e..c8a76ce9 100644
 +        unsafe { GetClientRect(handle, &mut client) }.ok()?;
 +        let from = unsafe { GetDpiForWindow(handle) };
 +        let dpi = wparam.0 as u32;
-+        let chrome = if self.state.decorations.get() == WindowDecorations::Client {
-+            [0, 0]
-+        } else {
-+            let mut frame = RECT::default();
-+            let style = WINDOW_STYLE(unsafe { get_window_long(handle, GWL_STYLE) } as u32);
-+            let extended = WINDOW_EX_STYLE(unsafe { get_window_long(handle, GWL_EXSTYLE) } as u32);
-+            unsafe { AdjustWindowRectExForDpi(&mut frame, style, false, extended, dpi) }.ok()?;
-+            crate::native_resize::frame_chrome(
-+                [frame.left, frame.top, frame.right, frame.bottom],
-+                self.hide_title_bar,
-+            )?
-+        };
++        let mut frame = RECT::default();
++        let style = WINDOW_STYLE(unsafe { get_window_long(handle, GWL_STYLE) } as u32);
++        let extended = WINDOW_EX_STYLE(unsafe { get_window_long(handle, GWL_EXSTYLE) } as u32);
++        unsafe { AdjustWindowRectExForDpi(&mut frame, style, false, extended, dpi) }.ok()?;
++        let chrome = crate::native_resize::frame_chrome(
++            [frame.left, frame.top, frame.right, frame.bottom],
++            self.hide_title_bar,
++        )?;
 +        let [width, height] = crate::native_resize::dpi_scaled_size(
 +            [client.right - client.left, client.bottom - client.top],
 +            from,
@@ -114,14 +112,28 @@ index 3e4d364e..c8a76ce9 100644
      fn handle_dpi_changed_msg(
          &self,
          handle: HWND,
+diff --git a/crates/gpui_windows/src/gpui_windows.rs b/crates/gpui_windows/src/gpui_windows.rs
+index e7a45a03..720b2264 100644
+--- a/crates/gpui_windows/src/gpui_windows.rs
++++ b/crates/gpui_windows/src/gpui_windows.rs
+@@ -12,6 +12,7 @@ mod dispatcher;
+ mod display;
+ mod events;
+ mod keyboard;
++mod native_resize;
+ mod platform;
+ mod system_notifications;
+ mod system_settings;
 diff --git a/crates/gpui_windows/src/native_resize.rs b/crates/gpui_windows/src/native_resize.rs
-index 7b08bd28..47a35299 100644
---- a/crates/gpui_windows/src/native_resize.rs
+new file mode 100644
+index 00000000..94f70769
+--- /dev/null
 +++ b/crates/gpui_windows/src/native_resize.rs
-@@ -152,6 +152,95 @@ fn anchor(mut rect: [i32; 4], edge: u32, size: [i32; 2]) -> Option<[i32; 4]> {
-     Some(rect)
- }
- 
+@@ -0,0 +1,156 @@
++//! Bounded conversion between logical client sizes and native sizing rectangles.
++
++const MAX_EXTENT: i32 = 1 << 20;
++
 +/// The outer size that keeps a client's logical size at a new DPI: the
 +/// client scaled by the DPI ratio, plus `chrome` measured at the new DPI.
 +pub(crate) fn dpi_scaled_size(
@@ -211,13 +223,9 @@ index 7b08bd28..47a35299 100644
 +    }
 +}
 +
- #[cfg(test)]
- mod tests {
-     use super::*;
-@@ -256,4 +345,63 @@ mod tests {
-                 .is_none()
-         );
-     }
++#[cfg(test)]
++mod tests {
++    use super::*;
 +
 +    #[test]
 +    fn a_dpi_change_keeps_the_client_size_and_measures_the_frame_anew() {
@@ -277,23 +285,23 @@ index 7b08bd28..47a35299 100644
 +        assert!(DpiResize::new([2132, 911], 0, 144, [1602, 686]).is_none());
 +        assert!(DpiResize::new([0, 911], 192, 144, [1602, 686]).is_none());
 +    }
- }
++}
 diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
-index a0b7819d..593a55a6 100644
+index 767f537a..2f1240c0 100644
 --- a/crates/gpui_windows/src/window.rs
 +++ b/crates/gpui_windows/src/window.rs
-@@ -185,6 +185,7 @@ pub(crate) struct WindowsWindowInner {
-     pub(crate) is_minimizable: Cell<bool>,
-     maximizable: Cell<Option<bool>>,
-     pending_maximize: Cell<Option<bool>>,
+@@ -103,6 +103,7 @@ pub(crate) struct WindowsWindowInner {
+     pub(crate) is_movable: bool,
+     pub(crate) is_resizable: bool,
+     pub(crate) is_minimizable: bool,
 +    pub(crate) dpi_resize: Cell<Option<crate::native_resize::DpiResize>>,
      pub(crate) executor: ForegroundExecutor,
      pub(crate) validation_number: usize,
      pub(crate) main_receiver: PriorityQueueReceiver<RunnableVariant>,
-@@ -484,6 +485,7 @@ impl WindowsWindowInner {
-             is_minimizable: Cell::new(context.is_minimizable),
-             maximizable: Cell::new(None),
-             pending_maximize: Cell::new(None),
+@@ -292,6 +293,7 @@ impl WindowsWindowInner {
+             is_movable: context.is_movable,
+             is_resizable: context.is_resizable,
+             is_minimizable: context.is_minimizable,
 +            dpi_resize: Cell::new(None),
              executor: context.executor.clone(),
              validation_number: context.validation_number,
