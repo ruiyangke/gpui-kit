@@ -61,6 +61,9 @@ pub struct WindowsWindowState {
     pub last_reported_modifiers: Cell<Option<Modifiers>>,
     pub last_reported_capslock: Cell<Option<Capslock>>,
     pub hovered: Cell<bool>,
+    /// The pointer's last position in the window and the button it moved
+    /// with, for the exit when it leaves.
+    pub last_pointer: Cell<(Point<Pixels>, Option<MouseButton>)>,
     pub last_visibility: Cell<Option<WindowVisibility>>,
     pub direct_manipulation: DirectManipulationHandler,
 
@@ -177,6 +180,7 @@ impl WindowsWindowState {
             last_reported_modifiers: Cell::new(last_reported_modifiers),
             last_reported_capslock: Cell::new(last_reported_capslock),
             hovered: Cell::new(hovered),
+            last_pointer: Cell::new((Point::default(), None)),
             last_visibility: Cell::new(None),
             renderer: RefCell::new(renderer),
             force_render_pending: Cell::new(false),

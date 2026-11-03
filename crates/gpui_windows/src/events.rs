@@ -111,7 +111,7 @@ impl WindowsWindowInner {
             WM_CLOSE => self.handle_close_msg(),
             WM_DESTROY => self.handle_destroy_msg(handle),
             WM_MOUSEMOVE => self.handle_mouse_move_msg(handle, lparam, wparam),
-            WM_MOUSELEAVE | WM_NCMOUSELEAVE => self.handle_mouse_leave_msg(),
+            WM_MOUSELEAVE | WM_NCMOUSELEAVE => self.handle_mouse_leave_msg(handle),
             WM_NCMOUSEMOVE => self.handle_nc_mouse_move_msg(handle, lparam),
             // Treat double click as a second single click, since we track the double clicks ourselves.
             // If you don't interact with any elements, this will fall through to the windows default
@@ -373,8 +373,10 @@ impl WindowsWindowInner {
         };
         let x = lparam.signed_loword() as f32;
         let y = lparam.signed_hiword() as f32;
+        let position = logical_point(x, y, scale_factor);
+        self.state.last_pointer.set((position, pressed_button));
         let input = PlatformInput::MouseMove(MouseMoveEvent {
-            position: logical_point(x, y, scale_factor),
+            position,
             pressed_button,
             modifiers: current_modifiers(),
         });
@@ -384,8 +386,26 @@ impl WindowsWindowInner {
         if handled { Some(0) } else { Some(1) }
     }
 
-    fn handle_mouse_leave_msg(&self) -> Option<isize> {
+    fn handle_mouse_leave_msg(&self, handle: HWND) -> Option<isize> {
         self.state.hovered.set(false);
+        // Tracking also ends when the cursor moves between the client area
+        // and this window's own non-client area, such as an app-drawn title
+        // bar; the cursor is still over the window then. A hidden window,
+        // a closing one included, reports nothing: GPUI may have removed it.
+        let mut cursor = POINT::default();
+        let left = unsafe {
+            IsWindowVisible(handle).as_bool()
+                && (GetCursorPos(&mut cursor).is_err() || WindowFromPoint(cursor) != handle)
+        };
+        if left && let Some(mut func) = self.state.callbacks.input.take() {
+            let (position, pressed_button) = self.state.last_pointer.get();
+            func(PlatformInput::MouseExited(MouseExitEvent {
+                position,
+                pressed_button,
+                modifiers: current_modifiers(),
+            }));
+            self.state.callbacks.input.set(Some(func));
+        }
         // The next window's `WM_SETCURSOR` picks its own cursor, so we just clear
         // the flag for tight `is_cursor_visible()` semantics.
         self.state.cursor_visible.store(true, Ordering::Relaxed);
@@ -1120,8 +1140,10 @@ impl WindowsWindowInner {
             y: lparam.signed_hiword().into(),
         };
         unsafe { ScreenToClient(handle, &mut cursor_point).ok().log_err() };
+        let position = logical_point(cursor_point.x as f32, cursor_point.y as f32, scale_factor);
+        self.state.last_pointer.set((position, None));
         let input = PlatformInput::MouseMove(MouseMoveEvent {
-            position: logical_point(cursor_point.x as f32, cursor_point.y as f32, scale_factor),
+            position,
             pressed_button: None,
             modifiers: current_modifiers(),
         });
