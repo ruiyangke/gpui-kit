@@ -51,7 +51,7 @@ GPUI Kit depends on `gpui-pre`, GPUI Kit's snapshot of Zed's GPUI crates. Its ba
 | 0009 appearance | Windows: background appearance applies, and failures are logged | Transparent remote menus and tooltips |
 | 0010 popups | Windows: popups open at their requested bounds; mouse passthrough; a native activation handler inside `WM_ACTIVATE` | Remote menus and tooltips; focus shared between remote windows |
 | 0011 utf16 | Windows: surrogate pairs and IME cancellation stay with their text target | Remote text input |
-| 0012 characters | Windows: layout characters (dead keys, AltGr) for an opted-in target, without IME | Typing into Linux apps in any keyboard layout |
+| 0012 characters | Windows: layout characters (AltGr, dead keys composed with the next key) for an opted-in target, without IME | Typing into Linux apps in any keyboard layout |
 | 0013 drop | Windows: file drops through `WM_DROPFILES`, delivered after native dispatch | Dropping files from Explorer onto Linux apps |
 | 0014 drag | Windows: keeps a left-button press for a later outgoing drag | Dragging from Linux apps to Windows |
 

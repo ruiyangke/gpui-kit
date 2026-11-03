@@ -162,10 +162,10 @@ index f24758d4..f8f41c44 100644
      pub fn zoom_window(&self) {
          self.platform_window.zoom();
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index dbfb2ed7..1a77c983 100644
+index cb25a3e1..2b03d802 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
-@@ -181,6 +181,7 @@ impl WindowsWindowInner {
+@@ -185,6 +185,7 @@ impl WindowsWindowInner {
          wparam: WPARAM,
          lparam: LPARAM,
      ) -> LRESULT {
@@ -173,7 +173,7 @@ index dbfb2ed7..1a77c983 100644
          // Native focus may leave and return before GPUI's deferred observers run.
          self.state
              .native_character_authority
-@@ -917,6 +918,8 @@ impl WindowsWindowInner {
+@@ -911,6 +912,8 @@ impl WindowsWindowInner {
              click_count,
              first_mouse: false,
          });

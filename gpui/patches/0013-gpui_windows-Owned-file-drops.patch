@@ -170,10 +170,10 @@ index 7db34d95..f24758d4 100644
      pub fn zoom_window(&self) {
          self.platform_window.zoom();
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index bb3ad4fc..dbfb2ed7 100644
+index 1688e53b..cb25a3e1 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
-@@ -185,7 +185,27 @@ impl WindowsWindowInner {
+@@ -189,7 +189,27 @@ impl WindowsWindowInner {
          self.state
              .native_character_authority
              .observe(msg, wparam, lparam);
