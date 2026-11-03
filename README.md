@@ -54,6 +54,7 @@ GPUI Kit depends on `gpui-pre`, GPUI Kit's snapshot of Zed's GPUI crates. Its ba
 | 0012 characters | Windows: layout characters (AltGr, dead keys composed with the next key) for an opted-in target, without IME | Typing into Linux apps in any keyboard layout |
 | 0013 drop | Windows: file drops through `WM_DROPFILES`, delivered after native dispatch | Dropping files from Explorer onto Linux apps |
 | 0014 drag | Windows: keeps a left-button press for a later outgoing drag | Dragging from Linux apps to Windows |
+| 0015 app id | Windows: a window's `app_id` is its AppUserModelID, set before the window is first shown and removed when it is destroyed | Each remote app's own taskbar button |
 
 0003 to 0007 are fixes that apply without the features after them; 0008 can go upstream on its own.
 

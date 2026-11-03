@@ -12,3 +12,4 @@
 0012-gpui_windows-Deliver-layout-characters-without-IME.patch
 0013-gpui_windows-Owned-file-drops.patch
 0014-gpui_windows-Capture-a-press-for-a-later-drag.patch
+0015-gpui_windows-Window-app_id-as-the-AppUserModelID.patch

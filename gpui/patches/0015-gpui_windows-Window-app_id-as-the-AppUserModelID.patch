@@ -1,0 +1,172 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ruiyangke <me@ry.ke>
+Date: Tue, 3 Nov 2026 00:00:01 +0000
+Subject: [PATCH] gpui_windows: Window app_id as the AppUserModelID
+
+`WindowOptions::app_id` and `Window::set_app_id` now set the window's
+AppUserModelID (`PKEY_AppUserModel_ID`) through its property store, as
+they set the app id on Wayland and X11. The ID from the options is set
+after `CreateWindowExW` and before the window is first shown, so the
+taskbar never lists it under another app first; a later
+`set_app_id` moves it. The value is removed on WM_DESTROY, as Windows
+expects of window properties.
+
+Newport needs it for Remote apps on Windows: each remote app's windows
+get their own taskbar button, apart from Newport's.
+
+PlatformWindow::set_app_id already had a default.
+
+Remove when upstream gpui_windows sets the AppUserModelID from app_id.
+---
+ crates/gpui_windows/src/app_user_model.rs | 57 +++++++++++++++++++++++
+ crates/gpui_windows/src/events.rs         |  3 ++
+ crates/gpui_windows/src/gpui_windows.rs   |  1 +
+ crates/gpui_windows/src/window.rs         | 22 +++++++++
+ 4 files changed, 83 insertions(+)
+ create mode 100644 crates/gpui_windows/src/app_user_model.rs
+
+diff --git a/crates/gpui_windows/src/app_user_model.rs b/crates/gpui_windows/src/app_user_model.rs
+new file mode 100644
+index 00000000..f417e388
+--- /dev/null
++++ b/crates/gpui_windows/src/app_user_model.rs
+@@ -0,0 +1,57 @@
++use std::mem::ManuallyDrop;
++
++use windows::{
++    Win32::{
++        Foundation::{HWND, PROPERTYKEY},
++        System::{
++            Com::StructuredStorage::{
++                PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
++            },
++            Variant::VT_LPWSTR,
++        },
++        UI::Shell::{
++            PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow},
++            SHStrDupW,
++        },
++    },
++    core::{GUID, HSTRING, Result},
++};
++
++// Copied from:
++// https://github.com/microsoft/windows-rs/blob/0fc3c2e5a13d4316d242bdeb0a52af611eba8bd4/crates/libs/windows/src/Windows/Win32/Storage/EnhancedStorage/mod.rs
++const PKEY_APP_USER_MODEL_ID: PROPERTYKEY = PROPERTYKEY {
++    fmtid: GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),
++    pid: 5,
++};
++
++/// Sets the window's AppUserModelID, the identity the taskbar groups it by,
++/// or removes it with `None`. Windows keeps the value in window properties,
++/// so a window that has one must remove it before it is destroyed.
++pub(crate) fn set_window_app_id(hwnd: HWND, app_id: Option<&str>) -> Result<()> {
++    let value = match app_id {
++        Some(app_id) => string_value(app_id)?,
++        None => PROPVARIANT::default(),
++    };
++    unsafe {
++        let store: IPropertyStore = SHGetPropertyStoreForWindow(hwnd)?;
++        store.SetValue(&PKEY_APP_USER_MODEL_ID, &value)?;
++        store.Commit()
++    }
++}
++
++/// A `VT_LPWSTR` value, the type the shell's AppUserModel properties take.
++fn string_value(value: &str) -> Result<PROPVARIANT> {
++    // Owned by the PROPVARIANT, which frees it with `PropVariantClear`.
++    let text = unsafe { SHStrDupW(&HSTRING::from(value)) }?;
++    Ok(PROPVARIANT {
++        Anonymous: PROPVARIANT_0 {
++            Anonymous: ManuallyDrop::new(PROPVARIANT_0_0 {
++                vt: VT_LPWSTR,
++                wReserved1: 0,
++                wReserved2: 0,
++                wReserved3: 0,
++                Anonymous: PROPVARIANT_0_0_0 { pwszVal: text },
++            }),
++        },
++    })
++}
+diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
+index 2b03d802..fb6fc37a 100644
+--- a/crates/gpui_windows/src/events.rs
++++ b/crates/gpui_windows/src/events.rs
+@@ -571,6 +571,9 @@ impl WindowsWindowInner {
+         self.state.closing.set(true);
+         self.retire_native_activation();
+         let callback = { self.state.callbacks.close.take() };
++        if self.app_id.take().is_some() {
++            crate::app_user_model::set_window_app_id(handle, None).log_err();
++        }
+         // Re-enable parent window if this was a modal dialog
+         if let Some(parent_hwnd) = self.parent_hwnd {
+             unsafe {
+diff --git a/crates/gpui_windows/src/gpui_windows.rs b/crates/gpui_windows/src/gpui_windows.rs
+index e078c97f..a4f3b0a9 100644
+--- a/crates/gpui_windows/src/gpui_windows.rs
++++ b/crates/gpui_windows/src/gpui_windows.rs
+@@ -1,5 +1,6 @@
+ #![cfg(target_os = "windows")]
+ 
++mod app_user_model;
+ mod clipboard;
+ mod destination_list;
+ mod dialog;
+diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
+index 75f54231..67e527db 100644
+--- a/crates/gpui_windows/src/window.rs
++++ b/crates/gpui_windows/src/window.rs
+@@ -194,6 +194,8 @@ pub(crate) struct WindowsWindowInner {
+     pub(crate) main_receiver: PriorityQueueReceiver<RunnableVariant>,
+     pub(crate) platform_window_handle: HWND,
+     pub(crate) parent_hwnd: Option<HWND>,
++    /// The AppUserModelID set on the window, removed when it is destroyed.
++    pub(crate) app_id: RefCell<Option<String>>,
+ }
+ 
+ impl WindowsWindowState {
+@@ -496,9 +498,20 @@ impl WindowsWindowInner {
+             platform_window_handle: context.platform_window_handle,
+             system_settings: WindowsSystemSettings::new(),
+             parent_hwnd: context.parent_hwnd,
++            app_id: RefCell::new(None),
+         }))
+     }
+ 
++    fn set_app_id(&self, app_id: &str) {
++        if self.app_id.borrow().as_deref() == Some(app_id) {
++            return;
++        }
++        match crate::app_user_model::set_window_app_id(self.hwnd, Some(app_id)) {
++            Ok(()) => *self.app_id.borrow_mut() = Some(app_id.to_owned()),
++            Err(error) => log::warn!("failed to set the window's AppUserModelID: {error}"),
++        }
++    }
++
+     fn toggle_fullscreen(self: &Rc<Self>) {
+         let this = self.clone();
+         self.executor
+@@ -790,6 +803,11 @@ impl WindowsWindow {
+             register_drag_drop(&this)?;
+             this.ole_drop_registered.set(true);
+         }
++        // Before the window is shown, so the taskbar never lists it under
++        // another app first.
++        if let Some(app_id) = params.app_id.as_deref() {
++            this.set_app_id(app_id);
++        }
+         set_non_rude_hwnd(hwnd, true);
+         configure_dwm_dark_mode(hwnd, appearance);
+         this.state.border_offset.update(hwnd)?;
+@@ -1331,6 +1349,10 @@ impl PlatformWindow for WindowsWindow {
+             .ok();
+     }
+ 
++    fn set_app_id(&mut self, app_id: &str) {
++        self.0.set_app_id(app_id);
++    }
++
+     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
+         self.state.background_appearance.set(background_appearance);
+         let hwnd = self.0.hwnd;
