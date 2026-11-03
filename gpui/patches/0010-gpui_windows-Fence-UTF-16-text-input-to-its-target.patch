@@ -32,7 +32,7 @@ Remove when upstream gpui_windows fences surrogate pairs to their target.
  create mode 100644 crates/gpui_windows/examples/input_lifecycle/windows.rs
 
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index 40e4b614..e09a2a94 100644
+index 08f322d5..b87c8f49 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
 @@ -2323,6 +2323,19 @@ impl PlatformInputHandler {

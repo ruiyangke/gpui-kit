@@ -33,13 +33,13 @@ position and paths outside native dispatch.
  create mode 100644 crates/gpui_windows/src/file_drop.rs
 
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index 96b86f3c..6fb8d2a1 100644
+index 84e7c1eb..6e630300 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
-@@ -1258,6 +1258,23 @@ pub enum NativeWindowActivation {
+@@ -1257,6 +1257,23 @@ pub enum NativeWindowActivation {
+     Retired,
  }
  
- #[expect(missing_docs)]
 +/// An owned Windows file-list drop, captured after release, before asynchronous dispatch.
 +/// No source effect (copy, move, or link) is negotiated by this event.
 +#[cfg(windows)]
@@ -57,9 +57,9 @@ index 96b86f3c..6fb8d2a1 100644
 +    pub context: u64,
 +}
 +
+ #[expect(missing_docs)]
  pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
      fn bounds(&self) -> Bounds<Pixels>;
-     fn is_maximized(&self) -> bool;
 @@ -1296,6 +1313,19 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
      #[cfg(windows)]
      fn set_popup_mouse_passthrough(&self, _enabled: bool) {}

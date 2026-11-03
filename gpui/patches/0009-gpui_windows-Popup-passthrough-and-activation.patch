@@ -24,9 +24,8 @@ Newport needs it for Remote apps on Windows: Linux menus and tooltips are
 popups, and shared focus between a remote window and its popups must
 follow native activation before GPUI observes it.
 
-set_native_activation_handler has no default. It exists only on Windows,
-where gpui_windows and the test window implement it.
-set_popup_mouse_passthrough has a default. WindowOptions gains a
+set_native_activation_handler and set_popup_mouse_passthrough exist only
+on Windows and have defaults. WindowOptions gains a
 Windows-only mouse_passthrough field, so struct literals on Windows must
 set it or use `..Default::default()`.
 
@@ -46,7 +45,7 @@ activation hook on Windows.
  create mode 100644 crates/gpui_windows/examples/window_lifecycle/windows.rs
 
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index f7bc3fe4..40e4b614 100644
+index e86749ca..08f322d5 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
 @@ -1242,6 +1242,21 @@ pub enum NativeResizeConstraint {
@@ -74,10 +73,10 @@ index f7bc3fe4..40e4b614 100644
 @@ -1272,6 +1287,15 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
      /// Replace the immutable native sizing policy; `None` restores platform defaults.
      #[cfg(windows)]
-     fn set_native_resize_constraint(&self, constraint: Option<NativeResizeConstraint>);
+     fn set_native_resize_constraint(&self, _constraint: Option<NativeResizeConstraint>) {}
 +    /// Install a pure native focus fence, outside GPUI App/window dispatch.
 +    #[cfg(windows)]
-+    fn set_native_activation_handler(&self, handler: Option<Rc<dyn Fn(NativeWindowActivation)>>);
++    fn set_native_activation_handler(&self, _handler: Option<Rc<dyn Fn(NativeWindowActivation)>>) {}
 +
 +    /// Change hit-test passthrough for an existing Windows popup. Other window
 +    /// kinds are unchanged. This does not remove an existing no-activate style.

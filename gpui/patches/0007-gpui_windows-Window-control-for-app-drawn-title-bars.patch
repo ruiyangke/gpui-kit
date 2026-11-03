@@ -23,9 +23,8 @@ and X11 already offer. On Windows, GPUI gains:
 Newport needs it for Remote apps on Windows: Linux apps draw their own
 title bars and move, resize and maximize themselves.
 
-set_native_resize_constraint has no default. It exists only on Windows,
-where gpui_windows and the test window implement it. The other new trait
-methods have defaults, and other platforms are unchanged. WindowParams
+The new trait methods have defaults, and other platforms are unchanged.
+set_native_resize_constraint exists only on Windows. WindowParams
 gains a Windows-only window_decorations field.
 
 Remove when upstream gpui_windows supports client decorations and these
@@ -44,7 +43,7 @@ window controls.
  create mode 100644 crates/gpui_windows/src/window_state.rs
 
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index 453a6cfc..f7bc3fe4 100644
+index 453a6cfc..e86749ca 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
 @@ -1220,6 +1220,28 @@ pub enum TextInputStateChange {
@@ -82,7 +81,7 @@ index 453a6cfc..f7bc3fe4 100644
      fn resize(&mut self, size: Size<Pixels>);
 +    /// Replace the immutable native sizing policy; `None` restores platform defaults.
 +    #[cfg(windows)]
-+    fn set_native_resize_constraint(&self, constraint: Option<NativeResizeConstraint>);
++    fn set_native_resize_constraint(&self, _constraint: Option<NativeResizeConstraint>) {}
      fn scale_factor(&self) -> f32;
      fn appearance(&self) -> WindowAppearance;
      fn display(&self) -> Option<Rc<dyn PlatformDisplay>>;

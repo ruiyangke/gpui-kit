@@ -30,7 +30,7 @@ Remove when upstream GPUI can start a native drag from an earlier press.
  create mode 100644 crates/gpui_windows/src/native_drag.rs
 
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index 6fb8d2a1..0fc76903 100644
+index 6e630300..a0207b86 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
 @@ -2,6 +2,8 @@ mod app_menu;

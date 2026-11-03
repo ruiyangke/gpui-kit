@@ -38,7 +38,7 @@ Remove when upstream GPUI delivers layout characters to a non-IME target.
  create mode 100644 crates/gpui_windows/src/native_characters.rs
 
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index e09a2a94..96b86f3c 100644
+index b87c8f49..84e7c1eb 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
 @@ -1340,6 +1340,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
@@ -278,7 +278,7 @@ index 13b6af3b..7db34d95 100644
 +mod native_character_tests;
 diff --git a/crates/gpui/src/window/native_character_tests.rs b/crates/gpui/src/window/native_character_tests.rs
 new file mode 100644
-index 00000000..8d57e8da
+index 00000000..7a8a0bd5
 --- /dev/null
 +++ b/crates/gpui/src/window/native_character_tests.rs
 @@ -0,0 +1,459 @@
@@ -286,7 +286,7 @@ index 00000000..8d57e8da
 +    App, AppContext as _, Bounds, Context, FocusHandle, InputHandler, InputPreference,
 +    InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent, Keystroke, Modifiers,
 +    ParentElement as _, Pixels, PlatformInput, PlatformWindow as _, Point, Render, Styled as _,
-+    TestAppContext, TestWindow, UTF16Selection, Window, actions, canvas, div, px,
++    TestAppContext, TestWindow, UTF16Selection, Window, canvas, div, px,
 +};
 +use std::{
 +    cell::{Cell, RefCell},
