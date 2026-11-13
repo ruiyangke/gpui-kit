@@ -159,7 +159,7 @@ impl Keystroke {
                 let os = os.ok_or_else(|| InvalidKeystrokeError {
                     keystroke: source.to_owned(),
                 })?;
-                if os == OperatingSystem::Mac {
+                if os.is_apple() {
                     modifiers.platform = true;
                 } else {
                     modifiers.control = true;
@@ -514,10 +514,10 @@ impl Modifiers {
 
     /// Whether the semantically 'secondary' modifier key is pressed.
     ///
-    /// On macOS, this is the command key.
+    /// On macOS and iPadOS, this is the command key.
     /// On Linux and Windows, this is the control key.
     pub fn secondary(&self, cx: &crate::App) -> bool {
-        if cx.platform_info().is_mac() {
+        if cx.platform_info().os.is_apple() {
             self.platform
         } else {
             self.control
@@ -548,7 +548,7 @@ impl Modifiers {
 
     /// Returns [`Modifiers`] with just the secondary key pressed.
     pub fn secondary_key(cx: &crate::App) -> Modifiers {
-        if cx.platform_info().is_mac() {
+        if cx.platform_info().os.is_apple() {
             Modifiers {
                 platform: true,
                 ..Default::default()
@@ -720,14 +720,14 @@ fn display_modifiers(
     f: &mut std::fmt::Formatter<'_>,
 ) -> std::fmt::Result {
     if modifiers.control {
-        f.write_str(if os == OperatingSystem::Mac {
+        f.write_str(if os.is_apple() {
             "^"
         } else {
             "ctrl-"
         })?;
     }
     if modifiers.alt {
-        f.write_str(if os == OperatingSystem::Mac {
+        f.write_str(if os.is_apple() {
             "⌥"
         } else {
             "alt-"
@@ -735,14 +735,14 @@ fn display_modifiers(
     }
     if modifiers.platform {
         f.write_str(match os {
-            OperatingSystem::Mac => "⌘",
+            OperatingSystem::Mac | OperatingSystem::Ios => "⌘",
             OperatingSystem::Windows => "⊞",
             OperatingSystem::Linux | OperatingSystem::FreeBsd => "❖",
-            OperatingSystem::Ios | OperatingSystem::Android | OperatingSystem::Unknown => "cmd-",
+            OperatingSystem::Android | OperatingSystem::Unknown => "cmd-",
         })?;
     }
     if modifiers.shift {
-        f.write_str(if os == OperatingSystem::Mac {
+        f.write_str(if os.is_apple() {
             "⇧"
         } else {
             "shift-"
@@ -757,17 +757,17 @@ fn display_key(
     f: &mut std::fmt::Formatter<'_>,
 ) -> std::fmt::Result {
     let key = match key {
-        "backspace" if os == OperatingSystem::Mac => '⌫',
-        "up" if os == OperatingSystem::Mac => '↑',
-        "down" if os == OperatingSystem::Mac => '↓',
-        "left" if os == OperatingSystem::Mac => '←',
-        "right" if os == OperatingSystem::Mac => '→',
-        "tab" if os == OperatingSystem::Mac => '⇥',
-        "escape" if os == OperatingSystem::Mac => '⎋',
-        "shift" if os == OperatingSystem::Mac => '⇧',
-        "control" if os == OperatingSystem::Mac => '⌃',
-        "alt" if os == OperatingSystem::Mac => '⌥',
-        "platform" if os == OperatingSystem::Mac => '⌘',
+        "backspace" if os.is_apple() => '⌫',
+        "up" if os.is_apple() => '↑',
+        "down" if os.is_apple() => '↓',
+        "left" if os.is_apple() => '←',
+        "right" if os.is_apple() => '→',
+        "tab" if os.is_apple() => '⇥',
+        "escape" if os.is_apple() => '⎋',
+        "shift" if os.is_apple() => '⇧',
+        "control" if os.is_apple() => '⌃',
+        "alt" if os.is_apple() => '⌥',
+        "platform" if os.is_apple() => '⌘',
 
         key if key.len() == 1 => key.chars().next().unwrap().to_ascii_uppercase(),
         key => return f.write_str(key),

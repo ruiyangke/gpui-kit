@@ -32,6 +32,14 @@ pub enum OperatingSystem {
     Unknown,
 }
 
+impl OperatingSystem {
+    /// Whether this is macOS or iPadOS, whose keyboards use Command for
+    /// shortcuts and show them as symbols.
+    pub fn is_apple(self) -> bool {
+        matches!(self, Self::Mac | Self::Ios)
+    }
+}
+
 /// The kind of application delivering the UI, independently of its host OS.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PlatformTarget {
