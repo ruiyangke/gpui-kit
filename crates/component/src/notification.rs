@@ -457,8 +457,10 @@ impl Render for Notification {
                     .absolute()
                     .top_1()
                     .right_1()
-                    .invisible()
-                    .group_hover("", |this| this.visible())
+                    // A touch screen has no hover to reveal it: always shown.
+                    .when(!cfg!(any(target_os = "ios", target_os = "android")), |this| {
+                        this.invisible().group_hover("", |this| this.visible())
+                    })
                     .child(
                         Button::new("close")
                             .icon(IconName::Close)
