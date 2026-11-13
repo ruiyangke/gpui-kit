@@ -3908,6 +3908,13 @@ impl<M: InputModeKind> InputBaseState<M> {
         }
 
         M::hide_context_menu(self, cx);
+        // iPad: a composition in progress is kept as typed, as UIKit's text
+        // views do; the input method can no longer finish it here. Desktop
+        // input methods end it themselves.
+        #[cfg(target_os = "ios")]
+        if self.ime_marked_range.is_some() {
+            self.unmark_text(window, cx);
+        }
         self.undo_manager.break_transaction_coalescing();
 
         // NOTE: Do not cancel select, when blur.
@@ -4439,6 +4446,13 @@ impl<M: InputModeKind> InputBaseState<M> {
 }
 
 impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
+    /// A read-only or disabled input still takes focus and selection, but
+    /// asks the platform for no text input, so iPadOS shows no keyboard.
+    #[cfg(target_os = "ios")]
+    fn accepts_text_input(&self, _window: &mut Window, _cx: &mut Context<Self>) -> bool {
+        !self.disabled && !self.readonly
+    }
+
     fn text_for_range(
         &mut self,
         range_utf16: Range<usize>,
@@ -4461,6 +4475,12 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
             range: self.range_to_utf16(&self.selected_range()),
             reversed: self.active_selection().reversed,
         })
+    }
+
+    // Platform text input (UIKit) mirrors the document only when it knows
+    // its length.
+    fn text_length_utf16(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<usize> {
+        Some(self.offset_to_utf16(self.text.len()))
     }
 
     fn marked_text_range(
