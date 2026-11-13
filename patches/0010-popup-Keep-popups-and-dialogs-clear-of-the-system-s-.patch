@@ -1,0 +1,103 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ruiyangke <me@ry.ke>
+Date: Fri, 13 Nov 2026 00:00:10 +0000
+Subject: [PATCH] popup: Keep popups and dialogs clear of the system's insets
+
+On an iPad the status bar, the home indicator and the on-screen keyboard
+cover the window's edges, but popups were placed, and dialogs padded, only
+for window decorations. A menu opened near the bottom edge slid under the
+keyboard, and a dialog's edge sat under the status bar.
+
+`system_insets` reports what the system draws over the window (the safe
+area, and the keyboard where it is larger than the bottom inset); desktop
+windows report none. The positioner adds it to the frame it keeps popups
+inside, and `Dialog` adds it to its window paddings. `add_edges` sums two
+sets of insets.
+
+Remove when upstream keeps popups and dialogs inside the window's safe area.
+---
+ crates/base/src/lib.rs                |  2 +-
+ crates/base/src/positioner.rs         | 33 ++++++++++++++++++++++++---
+ crates/component/src/dialog/dialog.rs |  5 +++-
+ 3 files changed, 35 insertions(+), 5 deletions(-)
+
+diff --git a/crates/base/src/lib.rs b/crates/base/src/lib.rs
+index 7b208d2f..bc3200e8 100644
+--- a/crates/base/src/lib.rs
++++ b/crates/base/src/lib.rs
+@@ -151,7 +151,7 @@ pub use pagination::{Pagination, PaginationItem, PaginationState};
+ pub use plot::PlotMotion;
+ pub use popover::{Popover, PopoverState};
+ pub use popup::{POPUP_PRIORITY, Popup};
+-pub use positioner::{Align, Positioner, ResolvedPosition};
++pub use positioner::{Align, Positioner, ResolvedPosition, add_edges, system_insets};
+ pub use progress::{Progress, ProgressIndicator, ProgressTrack};
+ pub use radio::{Radio, RadioStyles};
+ pub use radio_group::RadioGroup;
+diff --git a/crates/base/src/positioner.rs b/crates/base/src/positioner.rs
+index ccf2f3be..32825417 100644
+--- a/crates/base/src/positioner.rs
++++ b/crates/base/src/positioner.rs
+@@ -203,6 +203,30 @@ fn frame_insets(decorations: Decorations, client_inset: Pixels) -> Edges<Pixels>
+     }
+ }
+ 
++/// What the system draws over the window's edges (an iPad's status bar, home
++/// indicator and on-screen keyboard): popups stay clear of it. Desktop
++/// windows report none.
++pub fn system_insets(window: &Window) -> Edges<Pixels> {
++    let insets = window.insets();
++    let safe = insets.safe_area;
++    Edges {
++        top: safe.top,
++        right: safe.right,
++        bottom: safe.bottom.max(insets.ime.bottom),
++        left: safe.left,
++    }
++}
++
++/// Two sets of edge insets, side by side.
++pub fn add_edges(a: Edges<Pixels>, b: Edges<Pixels>) -> Edges<Pixels> {
++    Edges {
++        top: a.top + b.top,
++        right: a.right + b.right,
++        bottom: a.bottom + b.bottom,
++        left: a.left + b.left,
++    }
++}
++
+ /// Resolves the bounds of a popup of `popup_size`.
+ ///
+ /// Side placement picks the preferred side when the popup fits, otherwise the
+@@ -389,9 +413,12 @@ impl Element for Positioner {
+         }
+ 
+         let popup_size = (child_max - child_min).into();
+-        let frame = frame_insets(
+-            window.window_decorations(),
+-            window.client_inset().unwrap_or(px(0.)),
++        let frame = add_edges(
++            frame_insets(
++                window.window_decorations(),
++                window.client_inset().unwrap_or(px(0.)),
++            ),
++            system_insets(window),
+         );
+         let mut strategy = self.strategy;
+         if let (Strategy::Corner { position, .. }, Some(tracked)) =
+diff --git a/crates/component/src/dialog/dialog.rs b/crates/component/src/dialog/dialog.rs
+index 29ad47e2..d0f6e95b 100644
+--- a/crates/component/src/dialog/dialog.rs
++++ b/crates/component/src/dialog/dialog.rs
+@@ -653,7 +653,10 @@ impl RenderOnce for Dialog {
+         let on_ok = self.button_props.ok_handler();
+         let on_cancel = self.button_props.cancel_handler();
+ 
+-        let window_paddings = crate::window_border::window_paddings(window);
++        let window_paddings = gpui_base::add_edges(
++            crate::window_border::window_paddings(window),
++            gpui_base::system_insets(window),
++        );
+         let view_size = window.viewport_size()
+             - gpui::size(
+                 window_paddings.left + window_paddings.right,

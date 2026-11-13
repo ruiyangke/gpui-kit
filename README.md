@@ -24,13 +24,17 @@ Newport builds against branches generated from a base tag and a series. Never ed
 
 | Patch | What it does | Newport needs it for |
 | --- | --- | --- |
-| 0001 gpui | Pins `newport/gpui-pre-v0.3.10`; initializes the key event fields it adds | Terminal key encoding; Remote apps on Windows |
+| 0001 gpui | Pins `newport/gpui-pre-v0.3.10`; initializes the key event fields and `TextInputConfiguration::terminal_keys` it adds | Terminal key encoding; Remote apps on Windows; iPad |
 | 0002 dialog | `DialogHandle`, `close_dialog_if`, one owner per focus restoration | Closing its own dialog |
 | 0003 menu | Menus dismiss before running an item; dropdowns return focus to their trigger; `DropdownMenuPopover::open`, `DropdownButton::menu_trigger` | Focus after menu actions that open dialogs |
 | 0004 select | Select and Combobox confirm by value, not row; `ComboboxEvent::Activate`, `ComboboxState::close`, `Select::is_open`, `menu_scroll_handle`, `menu_item_min_height` | Paged and filtered pickers |
 | 0005 controls | Explicit sizes: `Button::content_style`, Pagination styles, Switch track and label size, `Size::Size` for Checkbox and Tab, `TabBar::label_size`, input `content_padding` | Pixel-sized controls |
 | 0006 text | Copies selections without trimming; keeps fractional line heights; public `SelectableText::paint_selection` | Logs, diffs and the code editor |
 | 0007 search | Fixes a bug since 0.8.0: the first character typed into the search panel was replaced by the next one | Editor search |
+| 0008 apple keys | Key bindings, `Kbd` hints and the monospace font test `target_vendor = "apple"` (Menlo on iOS) instead of macOS alone | Command and Option shortcuts and symbols on an iPad keyboard |
+| 0009 text input | Keeps a composition on blur and takes no keyboard for read-only inputs on iOS; reports `text_length_utf16` | iPad text input |
+| 0010 popup | `system_insets` and `add_edges`; popups and dialogs stay inside the safe area and keyboard | Menus and dialogs on iPad |
+| 0011 notification | The close button is always shown where there is no hover (iOS, Android) | Dismissing notifications on iPad |
 
 Each patch says in its message when it can be removed. Send 0007 upstream first; it fixes an upstream regression.
 
@@ -55,8 +59,13 @@ GPUI Kit depends on `gpui-pre`, GPUI Kit's snapshot of Zed's GPUI crates. Its ba
 | 0013 drop | Windows: file drops through `WM_DROPFILES`, delivered after native dispatch | Dropping files from Explorer onto Linux apps |
 | 0014 drag | Windows: keeps a left-button press for a later outgoing drag | Dragging from Linux apps to Windows |
 | 0015 app id | Windows: a window's `app_id` is its AppUserModelID, set before the window is first shown and removed when it is destroyed | Each remote app's own taskbar button |
+| 0016 command | `OperatingSystem::is_apple`; keystroke parsing, `Modifiers::secondary` and shortcut display treat iPadOS like macOS | Command shortcuts on an iPad keyboard |
+| 0017 font | iOS resolves the system font to Helvetica Neue, with symbol fallbacks ahead of emoji; a family's faces are checked for readable traits before fallbacks are applied | Text in the system font on iPad; launching on iOS 26 |
+| 0018 pickers | iOS: `prompt_for_paths` shows the document picker; `prompt_for_new_path` returns a path in the app's Documents folder | Opening files and folders on iPad |
+| 0019 keyboard | iOS: hardware keys as key events, terminal keys on the software keyboard (`TextInputConfiguration::terminal_keys`), keyboard raised only for focus the person asked for, paste through UIKit's `paste:` | Terminal and editor input, and paste, on iPad |
+| 0020 windows | iOS: one scene per window (reusing killed runs' sessions, not hidden windows'), roles, sheets, window bars, edge-to-edge layout with `WindowInsets::window_controls`, status bar style, long press, pinch, pointer hover | Several windows and the iPadOS 26 window controls on iPad |
 
-0003 to 0007 are fixes that apply without the features after them; 0008 can go upstream on its own.
+0003 to 0007 are fixes that apply without the features after them; 0008 can go upstream on its own. 0016 and 0017 apply without the iPad patches after them; 0018 to 0020 build on each other in order.
 
 To move to a newer snapshot, stage it with the generator, commit it as a root commit and tag it `gpui-pre-v<version>`, then follow "Move to a new release" with `gpui` before the tag, and update the pin in 0001.
 

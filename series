@@ -5,3 +5,7 @@
 0005-controls-Add-explicit-sizing-hooks.patch
 0006-text-Copy-selections-exactly-and-keep-fractional-lin.patch
 0007-input-Keep-the-first-character-typed-into-the-search.patch
+0008-input-Use-the-Apple-key-bindings-on-iPadOS.patch
+0009-input-Work-with-iPadOS-s-text-input.patch
+0010-popup-Keep-popups-and-dialogs-clear-of-the-system-s-.patch
+0011-notification-Always-show-the-close-button-on-touch-s.patch

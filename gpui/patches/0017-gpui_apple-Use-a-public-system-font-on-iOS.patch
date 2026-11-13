@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ruiyangke <me@ry.ke>
+Date: Fri, 13 Nov 2026 00:00:02 +0000
+Subject: [PATCH] gpui_apple: Use a public system font on iOS
+
+CoreText on iOS refuses the private `.AppleSystemUIFont` name and
+substitutes Times New Roman. Text set in the system font rendered in a serif
+face.
+
+On iOS the system font resolves to Helvetica Neue. Its cascade reaches
+Apple Color Emoji before text-style symbols (U+2733 drew as a green emoji),
+so the system font gets Zapf Dingbats and Apple Symbols as fallbacks first,
+as the real system font's cascade orders them.
+
+A family's faces are checked for readable traits before the fallbacks are
+applied: building the fallback list reads each face's weight unchecked, and
+on iOS 26 Helvetica Neue Light has no weight trait, which crashed at launch.
+
+Remove when upstream resolves the system font on iOS.
+---
+ crates/gpui_apple/src/text_system.rs | 74 +++++++++++++++++-----------
+ 1 file changed, 45 insertions(+), 29 deletions(-)
+
+diff --git a/crates/gpui_apple/src/text_system.rs b/crates/gpui_apple/src/text_system.rs
+index 3c0e17d6..23cba586 100644
+--- a/crates/gpui_apple/src/text_system.rs
++++ b/crates/gpui_apple/src/text_system.rs
+@@ -287,7 +287,22 @@ impl AppleTextSystemState {
+         features: &FontFeatures,
+         fallbacks: Option<&FontFallbacks>,
+     ) -> Result<SmallVec<[FontId; 4]>> {
+-        let name = gpui::font_name_with_fallbacks(name, ".AppleSystemUIFont");
++        // CoreText on iOS substitutes Times New Roman for private system names.
++        let system = if cfg!(target_os = "ios") { "Helvetica Neue" } else { ".AppleSystemUIFont" };
++        // Helvetica Neue's cascade reaches Apple Color Emoji before text-style
++        // symbols, so these go first.
++        #[cfg(target_os = "ios")]
++        let ios_fallbacks = gpui::FontFallbacks::from_fonts(vec![
++            "Zapf Dingbats".into(),
++            "Apple Symbols".into(),
++        ]);
++        #[cfg(target_os = "ios")]
++        let fallbacks = if name == ".SystemUIFont" && fallbacks.is_none() {
++            Some(&ios_fallbacks)
++        } else {
++            fallbacks
++        };
++        let name = gpui::font_name_with_fallbacks(name, system);
+ 
+         let mut font_ids = SmallVec::new();
+         let mut postscript_names_seen = HashSet::default();
+@@ -298,34 +313,6 @@ impl AppleTextSystemState {
+         for font in family.fonts() {
+             let mut font = font.load()?;
+ 
+-            apply_features_and_fallbacks(&mut font, features, fallbacks)?;
+-            // This block contains a precautionary fix to guard against loading fonts
+-            // that might cause panics due to `.unwrap()`s up the chain.
+-            {
+-                // We use the 'm' character for text measurements in various spots
+-                // (e.g., the editor). However, at time of writing some of those usages
+-                // will panic if the font has no 'm' glyph.
+-                //
+-                // Therefore, we check up front that the font has the necessary glyph.
+-                let has_m_glyph = font.glyph_for_char('m').is_some();
+-
+-                // HACK: The 'Segoe Fluent Icons' font does not have an 'm' glyph,
+-                // but we need to be able to load it for rendering Windows icons in
+-                // the Storybook (on macOS).
+-                let is_segoe_fluent_icons = font.full_name() == "Segoe Fluent Icons";
+-
+-                if !has_m_glyph && !is_segoe_fluent_icons {
+-                    // I spent far too long trying to track down why a font missing the 'm'
+-                    // character wasn't loading. This log statement will hopefully save
+-                    // someone else from suffering the same fate.
+-                    log::warn!(
+-                        "font '{}' has no 'm' character and was not loaded",
+-                        font.full_name()
+-                    );
+-                    continue;
+-                }
+-            }
+-
+             // We've seen a number of panics in production caused by calling font.properties()
+             // which unwraps a downcast to CFNumber. This is an attempt to avoid the panic,
+             // and to try and identify the incalcitrant font.
+@@ -356,6 +343,35 @@ impl AppleTextSystemState {
+                 continue;
+             }
+ 
++            apply_features_and_fallbacks(&mut font, features, fallbacks)?;
++            // This block contains a precautionary fix to guard against loading fonts
++            // that might cause panics due to `.unwrap()`s up the chain.
++            {
++                // We use the 'm' character for text measurements in various spots
++                // (e.g., the editor). However, at time of writing some of those usages
++                // will panic if the font has no 'm' glyph.
++                //
++                // Therefore, we check up front that the font has the necessary glyph.
++                let has_m_glyph = font.glyph_for_char('m').is_some();
++
++                // HACK: The 'Segoe Fluent Icons' font does not have an 'm' glyph,
++                // but we need to be able to load it for rendering Windows icons in
++                // the Storybook (on macOS).
++                let is_segoe_fluent_icons = font.full_name() == "Segoe Fluent Icons";
++
++                if !has_m_glyph && !is_segoe_fluent_icons {
++                    // I spent far too long trying to track down why a font missing the 'm'
++                    // character wasn't loading. This log statement will hopefully save
++                    // someone else from suffering the same fate.
++                    log::warn!(
++                        "font '{}' has no 'm' character and was not loaded",
++                        font.full_name()
++                    );
++                    continue;
++                }
++            }
++
++
+             let Some(postscript_name) = font.postscript_name() else {
+                 log::warn!(
+                     "font {:?} in family {:?} has no PostScript name; skipping",

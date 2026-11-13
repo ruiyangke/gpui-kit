@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ruiyangke <me@ry.ke>
+Date: Fri, 13 Nov 2026 00:00:11 +0000
+Subject: [PATCH] notification: Always show the close button on touch screens
+
+A notification's close button appears on hover. A touch screen has no hover,
+so on iPadOS and Android a notification could not be dismissed by hand.
+
+On those platforms the button is always shown.
+
+Send upstream.
+---
+ crates/component/src/notification.rs | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/crates/component/src/notification.rs b/crates/component/src/notification.rs
+index 76e08249..a3ba123d 100644
+--- a/crates/component/src/notification.rs
++++ b/crates/component/src/notification.rs
+@@ -457,8 +457,10 @@ impl Render for Notification {
+                     .absolute()
+                     .top_1()
+                     .right_1()
+-                    .invisible()
+-                    .group_hover("", |this| this.visible())
++                    // A touch screen has no hover to reveal it: always shown.
++                    .when(!cfg!(any(target_os = "ios", target_os = "android")), |this| {
++                        this.invisible().group_hover("", |this| this.visible())
++                    })
+                     .child(
+                         Button::new("close")
+                             .icon(IconName::Close)

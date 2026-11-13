@@ -13,3 +13,8 @@
 0013-gpui_windows-Owned-file-drops.patch
 0014-gpui_windows-Capture-a-press-for-a-later-drag.patch
 0015-gpui_windows-Window-app_id-as-the-AppUserModelID.patch
+0016-gpui-Use-Command-for-shortcuts-on-iPadOS.patch
+0017-gpui_apple-Use-a-public-system-font-on-iOS.patch
+0018-gpui_ios-Add-the-open-and-save-prompts-on-iPad.patch
+0019-gpui_ios-Hardware-keyboard-paste-and-terminal-keys.patch
+0020-gpui_ios-One-iPad-window-per-window-edge-to-edge.patch

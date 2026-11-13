@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ruiyangke <me@ry.ke>
+Date: Fri, 13 Nov 2026 00:00:09 +0000
+Subject: [PATCH] input: Work with iPadOS's text input
+
+UIKit's text input differs from desktop IME in three ways the input state
+didn't allow for.
+
+- On iPadOS a composition in progress is kept as typed when the input loses
+  focus, as UIKit's text views do, because the input method can no longer
+  finish it; desktop input methods end it themselves.
+- A read-only or disabled input still takes focus and selection but asks
+  the platform for no text input (`accepts_text_input`), so iPadOS shows no
+  keyboard for it.
+- `text_length_utf16` reports the document's length; UIKit mirrors the
+  document only when it knows it.
+
+Remove each when upstream's input handles platform text input the same way.
+---
+ crates/base/src/input/base/state.rs | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/crates/base/src/input/base/state.rs b/crates/base/src/input/base/state.rs
+index 47505674..78a511db 100644
+--- a/crates/base/src/input/base/state.rs
++++ b/crates/base/src/input/base/state.rs
+@@ -3908,6 +3908,13 @@ impl<M: InputModeKind> InputBaseState<M> {
+         }
+ 
+         M::hide_context_menu(self, cx);
++        // iPad: a composition in progress is kept as typed, as UIKit's text
++        // views do; the input method can no longer finish it here. Desktop
++        // input methods end it themselves.
++        #[cfg(target_os = "ios")]
++        if self.ime_marked_range.is_some() {
++            self.unmark_text(window, cx);
++        }
+         self.undo_manager.break_transaction_coalescing();
+ 
+         // NOTE: Do not cancel select, when blur.
+@@ -4439,6 +4446,13 @@ impl<M: InputModeKind> InputBaseState<M> {
+ }
+ 
+ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
++    /// A read-only or disabled input still takes focus and selection, but
++    /// asks the platform for no text input, so iPadOS shows no keyboard.
++    #[cfg(target_os = "ios")]
++    fn accepts_text_input(&self, _window: &mut Window, _cx: &mut Context<Self>) -> bool {
++        !self.disabled && !self.readonly
++    }
++
+     fn text_for_range(
+         &mut self,
+         range_utf16: Range<usize>,
+@@ -4463,6 +4477,12 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
+         })
+     }
+ 
++    // Platform text input (UIKit) mirrors the document only when it knows
++    // its length.
++    fn text_length_utf16(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<usize> {
++        Some(self.offset_to_utf16(self.text.len()))
++    }
++
+     fn marked_text_range(
+         &self,
+         _window: &mut Window,
