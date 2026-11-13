@@ -48,13 +48,13 @@ const STREAM_FADE_TICK: Duration = Duration::from_millis(33);
 
 pub(crate) fn init(cx: &mut App) {
     cx.bind_keys(vec![
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-c", input::Copy, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-c", input::Copy, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-a", input::SelectAll, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-a", input::SelectAll, Some(CONTEXT)),
     ]);
 }

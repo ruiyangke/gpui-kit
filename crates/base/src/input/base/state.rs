@@ -142,21 +142,21 @@ pub(crate) fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("backspace", Backspace, Some(CONTEXT)),
         KeyBinding::new("shift-backspace", Backspace, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("ctrl-backspace", Backspace, Some(CONTEXT)),
         KeyBinding::new("delete", Delete, Some(CONTEXT)),
         KeyBinding::new("shift-delete", Delete, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-backspace", DeleteToBeginningOfLine, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-delete", DeleteToEndOfLine, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("alt-backspace", DeleteToPreviousWordStart, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-backspace", DeleteToPreviousWordStart, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("alt-delete", DeleteToNextWordEnd, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-delete", DeleteToNextWordEnd, Some(CONTEXT)),
         KeyBinding::new(
             "enter",
@@ -195,124 +195,124 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("pagedown", MovePageDown, Some(CONTEXT)),
         KeyBinding::new("tab", IndentInline, Some(CONTEXT)),
         KeyBinding::new("shift-tab", OutdentInline, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-]", Indent, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-]", Indent, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-[", Outdent, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-[", Outdent, Some(CONTEXT)),
         KeyBinding::new("shift-left", SelectLeft, Some(CONTEXT)),
         KeyBinding::new("shift-right", SelectRight, Some(CONTEXT)),
         KeyBinding::new("shift-up", SelectUp, Some(CONTEXT)),
         KeyBinding::new("shift-down", SelectDown, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
         KeyBinding::new("shift-alt-left", SelectLeft, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
         KeyBinding::new("shift-alt-right", SelectRight, Some(CONTEXT)),
         // Avoid Ctrl+Alt+arrows on Linux, where desktops may reserve them.
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-alt-up", AddCursorAbove, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-alt-down", AddCursorBelow, Some(CONTEXT)),
         #[cfg(target_os = "windows")]
         KeyBinding::new("ctrl-alt-up", AddCursorAbove, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_vendor = "apple", target_os = "windows")))]
         KeyBinding::new("shift-alt-up", AddCursorAbove, Some(CONTEXT)),
         #[cfg(target_os = "windows")]
         KeyBinding::new("ctrl-alt-down", AddCursorBelow, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_vendor = "apple", target_os = "windows")))]
         KeyBinding::new("shift-alt-down", AddCursorBelow, Some(CONTEXT)),
         KeyBinding::new("home", MoveHome, Some(CONTEXT)),
         KeyBinding::new("end", MoveEnd, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-home", MoveToStart, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-end", MoveToEnd, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-shift-home", SelectToStart, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-shift-end", SelectToEnd, Some(CONTEXT)),
         KeyBinding::new("shift-home", SelectToStartOfLine, Some(CONTEXT)),
         KeyBinding::new("shift-end", SelectToEndOfLine, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("ctrl-shift-a", SelectToStartOfLine, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("ctrl-shift-e", SelectToEndOfLine, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("shift-cmd-left", SelectToStartOfLine, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("shift-cmd-right", SelectToEndOfLine, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_vendor = "apple", target_os = "linux"))]
         KeyBinding::new("alt-shift-left", SelectToPreviousWordStart, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-shift-left", SelectToPreviousWordStart, Some(CONTEXT)),
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_vendor = "apple", target_os = "linux"))]
         KeyBinding::new("alt-shift-right", SelectToNextWordEnd, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-shift-right", SelectToNextWordEnd, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-a", SelectAll, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-a", SelectAll, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-c", Copy, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-c", Copy, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-x", Cut, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-x", Cut, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-v", Paste, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-v", Paste, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("ctrl-a", MoveHome, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-left", MoveHome, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("ctrl-e", MoveEnd, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-right", MoveEnd, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-z", Undo, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-shift-z", Redo, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-up", MoveToStart, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-down", MoveToEnd, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("alt-left", MoveToPreviousWord, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("alt-right", MoveToNextWord, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-left", MoveToPreviousWord, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-right", MoveToNextWord, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-shift-up", SelectToStart, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-shift-down", SelectToEnd, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-z", Undo, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-y", Redo, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-.", ToggleCodeActions, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-.", ToggleCodeActions, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-f", Search, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-f", Search, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-shift-f", Replace, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-h", Replace, Some(CONTEXT)),
     ]);
 }
@@ -9797,7 +9797,7 @@ mod tests {
         cx.simulate_keystrokes("cmd-alt-up");
         #[cfg(target_os = "windows")]
         cx.simulate_keystrokes("ctrl-alt-up");
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_vendor = "apple", target_os = "windows")))]
         cx.simulate_keystrokes("alt-shift-up");
         view.input
             .read_with(&cx, |state, _| assert_eq!(state.selections.len(), 2));
@@ -9805,7 +9805,7 @@ mod tests {
         cx.simulate_keystrokes("cmd-alt-down");
         #[cfg(target_os = "windows")]
         cx.simulate_keystrokes("ctrl-alt-down");
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(target_vendor = "apple", target_os = "windows")))]
         cx.simulate_keystrokes("alt-shift-down");
         view.input
             .read_with(&cx, |state, _| assert_eq!(state.selections.len(), 3));

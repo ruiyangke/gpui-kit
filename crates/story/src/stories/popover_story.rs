@@ -24,21 +24,21 @@ actions!(popover_story, [Copy, Paste, Cut, SearchAll, ToggleCheck]);
 const CONTEXT: &str = "popover-story";
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-c", Copy, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-c", Copy, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-v", Paste, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-v", Paste, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-x", Cut, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-x", Cut, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-shift-f", SearchAll, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-shift-f", SearchAll, Some(CONTEXT)),
     ])
 }

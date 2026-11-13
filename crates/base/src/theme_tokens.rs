@@ -213,7 +213,7 @@ fn text_style(size: f32, line_height: f32) -> TextStyleToken {
 }
 
 fn default_mono_font_family() -> SharedString {
-    if cfg!(target_os = "macos") {
+    if cfg!(any(target_os = "macos", target_os = "ios")) {
         "Menlo".into()
     } else if cfg!(target_os = "windows") {
         "Consolas".into()

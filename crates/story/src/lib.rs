@@ -242,17 +242,17 @@ pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("/", ToggleSearch, None),
         KeyBinding::new("ctrl-shift-p", OpenCommandPalette, None),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-o", Open, None),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-o", Open, None),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-q", Quit, None),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("alt-f4", Quit, None),
-        #[cfg(target_os = "macos")]
+        #[cfg(target_vendor = "apple")]
         KeyBinding::new("cmd-k", SelectTheme, None),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(target_vendor = "apple"))]
         KeyBinding::new("ctrl-k", SelectTheme, None),
     ]);
 
