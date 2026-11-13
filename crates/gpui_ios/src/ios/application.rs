@@ -1,4 +1,8 @@
-use super::{CallbackSlot, platform::IosPlatformState, window::IosWindowState};
+use super::{
+    CallbackSlot,
+    platform::IosPlatformState,
+    window::IosWindowState,
+};
 use gpui::{AppLifecyclePhase, WindowVisibility};
 use gpui_apple::main_thread_marker;
 use objc2::{
@@ -15,7 +19,8 @@ use objc2_foundation::{
 use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::{
     UIApplication, UIApplicationDelegate, UIApplicationLaunchOptionsKey, UIOpenURLContext, UIScene,
-    UISceneConfiguration, UISceneConnectionOptions, UISceneDelegate, UISceneSession, UIWindowScene,
+    UISceneActivationRequestOptions, UISceneConfiguration, UISceneConnectionOptions, UISceneDelegate,
+    UISceneSession, UIWindowScene,
     UIWindowSceneDelegate,
 };
 use std::{
@@ -31,10 +36,63 @@ pub(super) struct IosApplicationState {
     pub(super) open_urls: CallbackSlot<Box<dyn FnMut(Vec<String>)>>,
     pub(super) app_lifecycle: CallbackSlot<Box<dyn FnMut(AppLifecyclePhase)>>,
     pub(super) memory_warning: CallbackSlot<Box<dyn FnMut()>>,
-    scene: RefCell<Option<Retained<UIWindowScene>>>,
+    /// Connected scenes, each showing one normal window.
+    scenes: RefCell<Vec<Rc<SceneEntry>>>,
+    /// Normal windows waiting for the scene UIKit was asked to connect.
+    pending: RefCell<Vec<Weak<IosWindowState>>>,
+    /// Sessions of hidden iPad windows asked to come back for a window.
+    reusing: RefCell<Vec<String>>,
+    /// Windows whose iPad window the person closed, asked to close: one the
+    /// app keeps (to ask about unsaved work) gets an iPad window again.
+    closing: RefCell<Vec<(Weak<IosWindowState>, std::time::Instant)>>,
+    /// Windows whose scene UIKit disconnected without discarding its session:
+    /// they return to that session's next scene.
+    detached: RefCell<Vec<(String, Weak<IosWindowState>)>>,
+    /// The scene the user last worked in; pop-ups and presented controllers go there.
+    active_scene: RefCell<Option<Retained<UIWindowScene>>>,
+    launched: Cell<bool>,
     // The link retains its delegate target, which only weakly references this state.
     display_link: RefCell<Option<Retained<CADisplayLink>>>,
     windows: RefCell<Vec<Weak<IosWindowState>>>,
+}
+
+/// One connected UIKit scene and the normal window it shows.
+pub(super) struct SceneEntry {
+    scene: Retained<UIWindowScene>,
+    session: String,
+    group: RefCell<Option<String>>,
+    windows: RefCell<Vec<Weak<IosWindowState>>>,
+    shown: RefCell<Weak<IosWindowState>>,
+    foreground: Cell<bool>,
+    active: Cell<bool>,
+    /// Asked to close: it stays connected a moment, but takes no window.
+    closing: Cell<bool>,
+}
+
+impl SceneEntry {
+    fn live(&self) -> Vec<Rc<IosWindowState>> {
+        self.windows.borrow().iter().filter_map(Weak::upgrade).collect()
+    }
+
+    fn add(&self, window: &Rc<IosWindowState>) {
+        let weak = Rc::downgrade(window);
+        let mut windows = self.windows.borrow_mut();
+        windows.retain(|entry| entry.upgrade().is_some());
+        if !windows.iter().any(|entry| entry.ptr_eq(&weak)) {
+            windows.push(weak.clone());
+        }
+        *self.shown.borrow_mut() = weak;
+    }
+
+    fn remove(&self, window: &Rc<IosWindowState>) {
+        let weak = Rc::downgrade(window);
+        self.windows
+            .borrow_mut()
+            .retain(|entry| !entry.ptr_eq(&weak) && entry.upgrade().is_some());
+        if self.shown.borrow().ptr_eq(&weak) {
+            *self.shown.borrow_mut() = Weak::new();
+        }
+    }
 }
 
 thread_local! {
@@ -85,8 +143,298 @@ impl IosApplicationState {
         }
     }
 
+    /// The scene the user last worked in, else any connected one.
     pub(super) fn window_scene(&self) -> Option<Retained<UIWindowScene>> {
-        self.scene.borrow().clone()
+        self.active_scene
+            .borrow()
+            .clone()
+            .or_else(|| self.scenes.borrow().first().map(|entry| entry.scene.clone()))
+    }
+
+    /// A connected scene that shows no window yet: the launch scene, or one
+    /// UIKit connected for windows that have since closed.
+    pub(super) fn free_scene(&self) -> Option<Retained<UIWindowScene>> {
+        self.scenes
+            .borrow()
+            .iter()
+            .find(|entry| {
+                !entry.closing.get() && entry.group.borrow().is_none() && entry.live().is_empty()
+            })
+            .map(|entry| entry.scene.clone())
+    }
+
+    fn entry_for_scene(&self, scene: &UIScene) -> Option<Rc<SceneEntry>> {
+        self.scenes
+            .borrow()
+            .iter()
+            .find(|entry| std::ptr::eq::<UIScene>(&**entry.scene, scene))
+            .cloned()
+    }
+
+    fn entry_for_window(&self, window: &IosWindowState) -> Option<Rc<SceneEntry>> {
+        self.scenes
+            .borrow()
+            .iter()
+            .find(|entry| entry.live().iter().any(|shown| std::ptr::eq(&**shown, window)))
+            .cloned()
+    }
+
+    fn entry_for_group(&self, group: &str) -> Option<Rc<SceneEntry>> {
+        self.scenes
+            .borrow()
+            .iter()
+            .find(|entry| entry.group.borrow().as_deref() == Some(group))
+            .cloned()
+    }
+
+    /// The window a raw handle names.
+    pub(super) fn window_for_handle(
+        &self,
+        handle: raw_window_handle::RawWindowHandle,
+    ) -> Option<Rc<IosWindowState>> {
+        self.windows
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find(|window| window.is_handle(handle))
+    }
+
+    /// The tab an app's iPad window shows.
+    pub(super) fn shown_in_group(&self, group: &str) -> Option<Rc<IosWindowState>> {
+        self.entry_for_group(group)?.shown.borrow().upgrade()
+    }
+
+    /// A normal window of the app `group` names, shown or still waiting for
+    /// its iPad window.
+    pub(super) fn any_in_group(&self, group: &str) -> Option<Rc<IosWindowState>> {
+        self.windows
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find(|window| window.is_normal() && window.group().as_deref() == Some(group))
+    }
+
+    /// Gives a normal window an iPad window (scene) of its own: the free one
+    /// it was built in, else a new one from UIKit.
+    pub(super) fn place_window(&self, window: &Rc<IosWindowState>) {
+        if let Some(scene) = window.scene()
+            && let Some(entry) = self.entry_for_scene(&scene)
+            && !entry.closing.get()
+            && entry.group.borrow().is_none()
+            && entry.live().is_empty()
+        {
+            *entry.group.borrow_mut() = window.group();
+            entry.add(window);
+            window.restrict_size(&scene);
+            return;
+        }
+        self.pending.borrow_mut().push(Rc::downgrade(window));
+        self.request_scene();
+    }
+
+    /// Asks UIKit for a scene, opened from the one in use, so Stage Manager
+    /// puts it beside that one. An iPad window a killed run left behind is
+    /// reused first: iPadOS keeps those sessions as hidden windows, can't
+    /// close them while they have no scene, and would otherwise gain one
+    /// for every window each run opens.
+    fn request_scene(&self) {
+        let Some(main_thread) = main_thread_marker() else {
+            return;
+        };
+        let application = UIApplication::sharedApplication(main_thread);
+        let options = self.active_scene.borrow().clone().map(|scene| {
+            let options = UISceneActivationRequestOptions::new(main_thread);
+            options.setRequestingScene(Some(&scene));
+            options
+        });
+        let orphan = {
+            let mut reusing = self.reusing.borrow_mut();
+            // A window the app hid keeps its session for when it comes back.
+            let detached = self.detached.borrow();
+            let orphan = application.openSessions().iter().find(|session| {
+                let id = session.persistentIdentifier().to_string();
+                session.scene().is_none()
+                    && !reusing.contains(&id)
+                    && !detached
+                        .iter()
+                        .any(|(kept, window)| *kept == id && window.upgrade().is_some())
+            });
+            if let Some(orphan) = &orphan {
+                reusing.push(orphan.persistentIdentifier().to_string());
+            }
+            orphan
+        };
+        // A session iPadOS refuses to bring back still gets a new one.
+        let fallback = block2::RcBlock::new(move |_error: std::ptr::NonNull<objc2_foundation::NSError>| {
+            if let Some(main_thread) = main_thread_marker() {
+                #[allow(deprecated)]
+                UIApplication::sharedApplication(main_thread)
+                    .requestSceneSessionActivation_userActivity_options_errorHandler(
+                        None, None, None, None,
+                    );
+            }
+        });
+        #[allow(deprecated)] // activateSceneSessionForRequest: needs iOS 17.
+        application.requestSceneSessionActivation_userActivity_options_errorHandler(
+            orphan.as_deref(),
+            None,
+            options.as_deref(),
+            orphan.is_some().then_some(&*fallback),
+        );
+    }
+
+    /// Whether `window` is shown in a connected scene of its own.
+    pub(super) fn has_scene(&self, window: &IosWindowState) -> bool {
+        self.entry_for_window(window).is_some()
+    }
+
+    /// Brings the scene showing `window` to the front.
+    pub(super) fn activate_window(&self, window: &IosWindowState) {
+        let (Some(entry), Some(main_thread)) = (self.entry_for_window(window), main_thread_marker())
+        else {
+            return;
+        };
+        #[allow(deprecated)]
+        UIApplication::sharedApplication(main_thread)
+            .requestSceneSessionActivation_userActivity_options_errorHandler(
+                Some(&entry.scene.session()),
+                None,
+                None,
+                None,
+            );
+    }
+
+    /// A window closed: its scene closes with it, unless it is the app's last.
+    pub(super) fn window_closed(&self, window: &Rc<IosWindowState>) {
+        let weak = Rc::downgrade(window);
+        self.pending.borrow_mut().retain(|entry| !entry.ptr_eq(&weak));
+        let detached_session = {
+            let mut detached = self.detached.borrow_mut();
+            let session = detached
+                .iter()
+                .find(|(_, entry)| entry.ptr_eq(&weak))
+                .map(|(session, _)| session.clone());
+            detached.retain(|(_, entry)| !entry.ptr_eq(&weak) && entry.upgrade().is_some());
+            session.filter(|session| !detached.iter().any(|(other, _)| other == session))
+        };
+        if let Some(session) = detached_session {
+            // Its iPad window was in the background, disconnected: without
+            // this it would stay in the app's windows, empty.
+            destroy_session(&session);
+        }
+        let Some(entry) = self.entry_for_window(window) else {
+            return;
+        };
+        entry.remove(window);
+        if !entry.live().is_empty() {
+            return;
+        }
+        *entry.group.borrow_mut() = None;
+        if self.scenes.borrow().len() > 1
+            && let Some(main_thread) = main_thread_marker()
+        {
+            entry.closing.set(true);
+            UIApplication::sharedApplication(main_thread)
+                .requestSceneSessionDestruction_options_errorHandler(
+                    &entry.scene.session(),
+                    None,
+                    None,
+                );
+        }
+    }
+
+    /// The person closed an iPad window (its session was discarded): each of
+    /// its windows decides, as GPUI's should-close says.
+    fn session_discarded(&self, session: &str) {
+        let windows: Vec<_> = {
+            let mut detached = self.detached.borrow_mut();
+            let (closing, kept) = std::mem::take(&mut *detached)
+                .into_iter()
+                .partition(|(id, _)| id == session);
+            *detached = kept;
+            closing
+        };
+        for (_, window) in windows {
+            if let Some(window) = window.upgrade() {
+                // Listed first: an app that hides the window while deciding
+                // takes it off the list (`app_hid`).
+                self.closing
+                    .borrow_mut()
+                    .push((Rc::downgrade(&window), std::time::Instant::now()));
+                window.request_close();
+            }
+        }
+    }
+
+    /// The app hid itself while its windows decided whether to close: the
+    /// ones it kept wait, without an iPad window, until a new iPad window
+    /// shows them again (`windows_for_new_scene`).
+    pub(super) fn app_hid(&self) {
+        self.closing.borrow_mut().clear();
+    }
+
+    /// A window still open a while after the person closed its iPad window
+    /// was kept by its app (unsaved work): it gets an iPad window again.
+    fn reopen_kept_windows(&self) {
+        let due: Vec<_> = {
+            let mut closing = self.closing.borrow_mut();
+            let (due, waiting) = std::mem::take(&mut *closing)
+                .into_iter()
+                .partition(|(_, since)| since.elapsed() > std::time::Duration::from_millis(1500));
+            *closing = waiting;
+            due
+        };
+        for (window, _) in due {
+            if let Some(window) = window.upgrade()
+                && self.entry_for_window(&window).is_none()
+            {
+                self.place_window(&window);
+            }
+        }
+    }
+
+    /// The window a newly connected scene shows: its session's own, else the
+    /// oldest waiting one, else a normal window left without a scene (one the
+    /// app hid when its iPad window closed).
+    fn windows_for_new_scene(&self, session: &str) -> Vec<Rc<IosWindowState>> {
+        let restored: Vec<_> = {
+            let mut detached = self.detached.borrow_mut();
+            let (restored, kept) = std::mem::take(&mut *detached)
+                .into_iter()
+                .partition(|(id, _)| id == session);
+            *detached = kept;
+            restored.into_iter().filter_map(|(_, window)| window.upgrade()).collect()
+        };
+        if !restored.is_empty() {
+            return restored;
+        }
+        let pending: Vec<_> = self.pending.borrow().iter().filter_map(Weak::upgrade).collect();
+        if let Some(first) = pending.first().cloned() {
+            let weak = Rc::downgrade(&first);
+            self.pending.borrow_mut().retain(|waiting| !waiting.ptr_eq(&weak));
+            return vec![first];
+        }
+        let windows = self.windows.borrow().clone();
+        let detached = self.detached.borrow();
+        windows
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find(|window| {
+                let weak = Rc::downgrade(window);
+                window.is_normal()
+                    && self.entry_for_window(window).is_none()
+                    && !detached.iter().any(|(_, entry)| entry.ptr_eq(&weak))
+            })
+            .into_iter()
+            .collect()
+    }
+
+    fn aggregate(&self) -> (bool, bool) {
+        let scenes = self.scenes.borrow();
+        (
+            scenes.iter().any(|entry| entry.foreground.get()),
+            scenes.iter().any(|entry| entry.active.get()),
+        )
     }
 
     pub(super) fn register_window(&self, window: &Rc<IosWindowState>) {
@@ -129,28 +477,6 @@ impl IosApplicationState {
 
     fn notify_memory_warning(&self) {
         self.memory_warning.with(|callback| callback());
-    }
-
-    fn notify_app_lifecycle(&self, phase: AppLifecyclePhase) {
-        match phase {
-            AppLifecyclePhase::Foreground => self.with_windows(|window| {
-                window.notify_visibility_change(WindowVisibility::Visible);
-            }),
-            AppLifecyclePhase::Active => {
-                self.with_windows(|window| window.notify_active_status_change(true));
-            }
-            AppLifecyclePhase::Inactive => {
-                self.with_windows(|window| window.notify_active_status_change(false));
-            }
-            AppLifecyclePhase::Background | AppLifecyclePhase::Disconnected => {
-                self.with_windows(|window| window.notify_active_status_change(false));
-                // An activation observer may have closed a window; revisit the registry.
-                self.with_windows(|window| {
-                    window.notify_visibility_change(WindowVisibility::Hidden)
-                });
-            }
-        }
-        self.app_lifecycle.with(|callback| callback(phase));
     }
 
     fn open_urls(&self, contexts: &NSSet<UIOpenURLContext>) {
@@ -250,6 +576,21 @@ define_class!(
             configuration
         }
 
+        #[unsafe(method(application:didDiscardSceneSessions:))]
+        fn did_discard_scene_sessions(
+            &self,
+            _application: &UIApplication,
+            sessions: &NSSet<UISceneSession>,
+        ) {
+            if let Some(platform) = self.ivars().upgrade() {
+                for session in sessions.iter() {
+                    platform
+                        .application
+                        .session_discarded(&session.persistentIdentifier().to_string());
+                }
+            }
+        }
+
         #[unsafe(method(applicationDidReceiveMemoryWarning:))]
         fn did_receive_memory_warning(&self, _application: &UIApplication) {
             if let Some(platform) = self.ivars().upgrade() {
@@ -276,7 +617,21 @@ define_class!(
     struct SceneDelegate;
 
     unsafe impl NSObjectProtocol for SceneDelegate {}
-    unsafe impl UIWindowSceneDelegate for SceneDelegate {}
+    unsafe impl UIWindowSceneDelegate for SceneDelegate {
+        /// Moving, resizing or the window controls appearing: lay out again.
+        #[unsafe(method(windowScene:didUpdateEffectiveGeometry:))]
+        fn did_update_geometry(&self, scene: &UIWindowScene, _previous: &AnyObject) {
+            // Every window in the scene, including one not yet counted as
+            // shown there (a size restriction can resize it first).
+            if let Some(platform) = self.platform_for_scene(scene) {
+                platform.application.with_windows(|window| {
+                    if window.scene().is_some_and(|own| &*own == scene) {
+                        window.relayout();
+                    }
+                });
+            }
+        }
+    }
 
     impl SceneDelegate {
         #[unsafe(method_id(init))]
@@ -292,6 +647,7 @@ define_class!(
         fn render_frame(&self, _display_link: &CADisplayLink) {
             if let Some(platform) = self.ivars().upgrade() {
                 platform.application.with_windows(IosWindowState::request_frame);
+                platform.application.reopen_kept_windows();
             }
         }
     }
@@ -311,14 +667,42 @@ define_class!(
                 return;
             };
             let application = &platform.application;
-            if application.window_scene().is_some() {
-                log::error!("GPUI iOS currently supports one connected window scene");
-                return;
+            let session = scene.session().persistentIdentifier().to_string();
+            application.reusing.borrow_mut().retain(|reused| *reused != session);
+            let entry = Rc::new(SceneEntry {
+                scene: scene.retain(),
+                session: session.clone(),
+                group: RefCell::default(),
+                windows: RefCell::default(),
+                shown: RefCell::default(),
+                foreground: Cell::new(false),
+                active: Cell::new(false),
+                closing: Cell::new(false),
+            });
+            application.scenes.borrow_mut().push(entry.clone());
+            if application.active_scene.borrow().is_none() {
+                *application.active_scene.borrow_mut() = Some(scene.retain());
             }
-            *application.scene.borrow_mut() = Some(scene.retain());
-            application.finish_launching();
-            // UIKit can reconnect a scene without restarting the Rust application.
-            application.with_windows(|window| window.attach_to_scene(scene));
+            if !application.launched.replace(true) {
+                // GPUI's first window takes this, the launch scene.
+                application.finish_launching();
+            } else if let windows @ [first, ..] =
+                application.windows_for_new_scene(&session).as_slice()
+            {
+                *entry.group.borrow_mut() = first.group();
+                for window in windows {
+                    window.attach_to_scene(scene);
+                    entry.add(window);
+                }
+            } else if let Some(main_thread) = main_thread_marker() {
+                // A scene UIKit restored for a window that no longer exists.
+                UIApplication::sharedApplication(main_thread)
+                    .requestSceneSessionDestruction_options_errorHandler(
+                        &scene.session(),
+                        None,
+                        None,
+                    );
+            }
             if let Some(contexts) = options.url_contexts() {
                 application.open_urls(&contexts);
             }
@@ -328,7 +712,9 @@ define_class!(
                 }
             }
 
-            application.stop_display_link();
+            if application.display_link.borrow().is_some() {
+                return;
+            }
             let display_link = unsafe {
                 let display_link =
                     CADisplayLink::displayLinkWithTarget_selector(self, sel!(renderFrame:));
@@ -344,41 +730,58 @@ define_class!(
 
         #[unsafe(method(sceneDidDisconnect:))]
         fn did_disconnect(&self, scene: &UIScene) {
-            if let Some(platform) = self.platform_for_scene(scene) {
-                platform.application.stop_display_link();
-                platform.application.scene.borrow_mut().take();
-                platform.application.notify_app_lifecycle(AppLifecyclePhase::Disconnected);
+            let Some(platform) = self.platform_for_scene(scene) else {
+                return;
+            };
+            let application = &platform.application;
+            let Some(entry) = application.entry_for_scene(scene) else {
+                return;
+            };
+            application
+                .scenes
+                .borrow_mut()
+                .retain(|other| !Rc::ptr_eq(other, &entry));
+            let was_active = application
+                .active_scene
+                .borrow()
+                .as_ref()
+                .is_some_and(|active| std::ptr::eq::<UIScene>(&***active, scene));
+            if was_active {
+                let next = application.scenes.borrow().first().map(|e| e.scene.clone());
+                *application.active_scene.borrow_mut() = next;
+            }
+            for window in entry.live() {
+                window.notify_active_status_change(false);
+                window.notify_visibility_change(WindowVisibility::Hidden);
+                application
+                    .detached
+                    .borrow_mut()
+                    .push((entry.session.clone(), Rc::downgrade(&window)));
+            }
+            if application.scenes.borrow().is_empty() {
+                application.stop_display_link();
+                application.app_lifecycle.with(|callback| callback(AppLifecyclePhase::Disconnected));
             }
         }
 
         #[unsafe(method(sceneWillEnterForeground:))]
         fn will_enter_foreground(&self, scene: &UIScene) {
-            if let Some(platform) = self.platform_for_scene(scene) {
-                platform.application.set_display_link_paused(false);
-                platform.application.notify_app_lifecycle(AppLifecyclePhase::Foreground);
-            }
+            self.scene_changed(scene, Some(true), None);
         }
 
         #[unsafe(method(sceneDidBecomeActive:))]
         fn did_become_active(&self, scene: &UIScene) {
-            if let Some(platform) = self.platform_for_scene(scene) {
-                platform.application.notify_app_lifecycle(AppLifecyclePhase::Active);
-            }
+            self.scene_changed(scene, None, Some(true));
         }
 
         #[unsafe(method(sceneWillResignActive:))]
         fn will_resign_active(&self, scene: &UIScene) {
-            if let Some(platform) = self.platform_for_scene(scene) {
-                platform.application.notify_app_lifecycle(AppLifecyclePhase::Inactive);
-            }
+            self.scene_changed(scene, None, Some(false));
         }
 
         #[unsafe(method(sceneDidEnterBackground:))]
         fn did_enter_background(&self, scene: &UIScene) {
-            if let Some(platform) = self.platform_for_scene(scene) {
-                platform.application.set_display_link_paused(true);
-                platform.application.notify_app_lifecycle(AppLifecyclePhase::Background);
-            }
+            self.scene_changed(scene, Some(false), None);
         }
 
         #[unsafe(method(scene:openURLContexts:))]
@@ -397,14 +800,77 @@ define_class!(
     }
 );
 
+/// Closes the iPad window whose session is `persistent_id`.
+fn destroy_session(persistent_id: &str) {
+    let Some(main_thread) = main_thread_marker() else {
+        return;
+    };
+    let application = UIApplication::sharedApplication(main_thread);
+    if let Some(session) = application
+        .openSessions()
+        .iter()
+        .find(|session| session.persistentIdentifier().to_string() == persistent_id)
+    {
+        application.requestSceneSessionDestruction_options_errorHandler(&session, None, None);
+    }
+}
+
 impl SceneDelegate {
     fn platform_for_scene(&self, scene: &UIScene) -> Option<Rc<IosPlatformState>> {
         let platform = self.ivars().upgrade()?;
-        let owns_scene = platform
-            .application
-            .window_scene()
-            .is_some_and(|current| std::ptr::eq::<UIScene>(&**current, scene));
+        let owns_scene = platform.application.entry_for_scene(scene).is_some();
         owns_scene.then_some(platform)
+    }
+
+    /// One scene moved to or from the foreground, or gained or lost focus:
+    /// its own window follows it, the application follows them all.
+    fn scene_changed(&self, scene: &UIScene, foreground: Option<bool>, active: Option<bool>) {
+        let Some(platform) = self.platform_for_scene(scene) else {
+            return;
+        };
+        let application = &platform.application;
+        let Some(entry) = application.entry_for_scene(scene) else {
+            return;
+        };
+        let (was_foreground, was_active) = application.aggregate();
+        let window = entry.shown.borrow().upgrade();
+        if let Some(foreground) = foreground {
+            entry.foreground.set(foreground);
+            if let Some(window) = &window {
+                window.notify_visibility_change(if foreground {
+                    WindowVisibility::Visible
+                } else {
+                    WindowVisibility::Hidden
+                });
+            }
+        }
+        if let Some(active) = active {
+            entry.active.set(active);
+            if active {
+                *application.active_scene.borrow_mut() = Some(entry.scene.clone());
+            }
+            if let Some(window) = &window {
+                window.notify_active_status_change(active);
+            }
+        }
+        let (is_foreground, is_active) = application.aggregate();
+        if is_foreground != was_foreground {
+            application.set_display_link_paused(!is_foreground);
+            let phase = if is_foreground {
+                AppLifecyclePhase::Foreground
+            } else {
+                AppLifecyclePhase::Background
+            };
+            application.app_lifecycle.with(|callback| callback(phase));
+        }
+        if is_active != was_active {
+            let phase = if is_active {
+                AppLifecyclePhase::Active
+            } else {
+                AppLifecyclePhase::Inactive
+            };
+            application.app_lifecycle.with(|callback| callback(phase));
+        }
     }
 }
 
@@ -478,8 +944,8 @@ mod tests {
                 }));
             }
         }));
-        state.notify_app_lifecycle(AppLifecyclePhase::Foreground);
-        state.notify_app_lifecycle(AppLifecyclePhase::Active);
+        state.app_lifecycle.with(|callback| callback(AppLifecyclePhase::Foreground));
+        state.app_lifecycle.with(|callback| callback(AppLifecyclePhase::Active));
         assert_eq!(
             *events.borrow(),
             [
@@ -518,11 +984,11 @@ mod tests {
                 events.borrow_mut().push(phase);
                 let state = state.upgrade().unwrap();
                 state.app_lifecycle.take();
-                state.notify_app_lifecycle(AppLifecyclePhase::Inactive);
+                state.app_lifecycle.with(|callback| callback(AppLifecyclePhase::Inactive));
             }
         }));
-        state.notify_app_lifecycle(AppLifecyclePhase::Disconnected);
-        state.notify_app_lifecycle(AppLifecyclePhase::Foreground);
+        state.app_lifecycle.with(|callback| callback(AppLifecyclePhase::Disconnected));
+        state.app_lifecycle.with(|callback| callback(AppLifecyclePhase::Foreground));
         assert_eq!(*events.borrow(), [AppLifecyclePhase::Disconnected]);
     }
 

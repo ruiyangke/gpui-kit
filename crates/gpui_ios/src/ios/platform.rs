@@ -224,7 +224,7 @@ impl Platform for IosPlatform {
     }
 
     fn hide(&self) {
-        // iOS apps cannot hide themselves
+        self.0.application.app_hid();
     }
 
     fn hide_other_apps(&self) {

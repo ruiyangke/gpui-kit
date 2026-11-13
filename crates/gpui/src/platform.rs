@@ -1197,6 +1197,12 @@ pub struct WindowInsets {
     /// Content inset from an edge by `d` lines up with the display by using a
     /// radius of `radius - d`. (iOS 26+: a concentric `UICornerConfiguration`.)
     pub corner_radii: Corners<Pixels>,
+    /// The system's window controls drawn over the window's top-leading
+    /// corner, as macOS draws its traffic lights in a title bar: `top` is
+    /// where they end below the window's top edge, `left` where they end
+    /// from its leading edge. A title bar starts beside them. Zero where the
+    /// platform draws none over the content. (iPadOS 26+: the controls pill.)
+    pub window_controls: Edges<Pixels>,
 }
 
 impl WindowInsets {

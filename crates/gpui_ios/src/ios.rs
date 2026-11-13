@@ -6,10 +6,12 @@ mod document_picker;
 mod events;
 mod paste;
 mod platform;
+mod role;
 mod text_input;
 mod window;
 
 pub use paste::PASTE_NOTIFICATION;
+pub use role::{WindowRole, set_next_window_role};
 
 use std::cell::{Cell, RefCell};
 
