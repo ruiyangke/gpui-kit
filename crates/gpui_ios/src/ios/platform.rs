@@ -306,14 +306,14 @@ impl Platform for IosPlatform {
 
     fn prompt_for_paths(
         &self,
-        _options: PathPromptOptions,
+        options: PathPromptOptions,
     ) -> oneshot::Receiver<Result<Option<Vec<PathBuf>>>> {
         let (tx, rx) = oneshot::channel();
-        if tx
-            .send(Err(anyhow!("File picker not yet implemented for iOS")))
-            .is_err()
-        {
-            log::debug!("GPUI iOS: File picker receiver was dropped");
+        match self.presented_view_controller() {
+            Some(controller) => super::document_picker::open(&controller, &options, tx),
+            None => {
+                let _ = tx.send(Err(anyhow!("No window to show the document picker over")));
+            }
         }
         rx
     }
@@ -321,15 +321,10 @@ impl Platform for IosPlatform {
     fn prompt_for_new_path(
         &self,
         _directory: &Path,
-        _suggested_name: Option<&str>,
+        suggested_name: Option<&str>,
     ) -> oneshot::Receiver<Result<Option<PathBuf>>> {
         let (tx, rx) = oneshot::channel();
-        if tx
-            .send(Err(anyhow!("Save dialog not yet implemented for iOS")))
-            .is_err()
-        {
-            log::debug!("GPUI iOS: Save dialog receiver was dropped");
-        }
+        let _ = tx.send(super::document_picker::new_path(suggested_name).map(Some));
         rx
     }
 

@@ -2,6 +2,7 @@
 
 mod application;
 mod display;
+mod document_picker;
 mod events;
 mod platform;
 mod text_input;
