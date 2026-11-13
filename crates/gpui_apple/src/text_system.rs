@@ -287,7 +287,22 @@ impl AppleTextSystemState {
         features: &FontFeatures,
         fallbacks: Option<&FontFallbacks>,
     ) -> Result<SmallVec<[FontId; 4]>> {
-        let name = gpui::font_name_with_fallbacks(name, ".AppleSystemUIFont");
+        // CoreText on iOS substitutes Times New Roman for private system names.
+        let system = if cfg!(target_os = "ios") { "Helvetica Neue" } else { ".AppleSystemUIFont" };
+        // Helvetica Neue's cascade reaches Apple Color Emoji before text-style
+        // symbols, so these go first.
+        #[cfg(target_os = "ios")]
+        let ios_fallbacks = gpui::FontFallbacks::from_fonts(vec![
+            "Zapf Dingbats".into(),
+            "Apple Symbols".into(),
+        ]);
+        #[cfg(target_os = "ios")]
+        let fallbacks = if name == ".SystemUIFont" && fallbacks.is_none() {
+            Some(&ios_fallbacks)
+        } else {
+            fallbacks
+        };
+        let name = gpui::font_name_with_fallbacks(name, system);
 
         let mut font_ids = SmallVec::new();
         let mut postscript_names_seen = HashSet::default();
@@ -297,34 +312,6 @@ impl AppleTextSystemState {
             .or_else(|_| self.system_source.select_family_by_name(name))?;
         for font in family.fonts() {
             let mut font = font.load()?;
-
-            apply_features_and_fallbacks(&mut font, features, fallbacks)?;
-            // This block contains a precautionary fix to guard against loading fonts
-            // that might cause panics due to `.unwrap()`s up the chain.
-            {
-                // We use the 'm' character for text measurements in various spots
-                // (e.g., the editor). However, at time of writing some of those usages
-                // will panic if the font has no 'm' glyph.
-                //
-                // Therefore, we check up front that the font has the necessary glyph.
-                let has_m_glyph = font.glyph_for_char('m').is_some();
-
-                // HACK: The 'Segoe Fluent Icons' font does not have an 'm' glyph,
-                // but we need to be able to load it for rendering Windows icons in
-                // the Storybook (on macOS).
-                let is_segoe_fluent_icons = font.full_name() == "Segoe Fluent Icons";
-
-                if !has_m_glyph && !is_segoe_fluent_icons {
-                    // I spent far too long trying to track down why a font missing the 'm'
-                    // character wasn't loading. This log statement will hopefully save
-                    // someone else from suffering the same fate.
-                    log::warn!(
-                        "font '{}' has no 'm' character and was not loaded",
-                        font.full_name()
-                    );
-                    continue;
-                }
-            }
 
             // We've seen a number of panics in production caused by calling font.properties()
             // which unwraps a downcast to CFNumber. This is an attempt to avoid the panic,
@@ -355,6 +342,35 @@ impl AppleTextSystemState {
                 );
                 continue;
             }
+
+            apply_features_and_fallbacks(&mut font, features, fallbacks)?;
+            // This block contains a precautionary fix to guard against loading fonts
+            // that might cause panics due to `.unwrap()`s up the chain.
+            {
+                // We use the 'm' character for text measurements in various spots
+                // (e.g., the editor). However, at time of writing some of those usages
+                // will panic if the font has no 'm' glyph.
+                //
+                // Therefore, we check up front that the font has the necessary glyph.
+                let has_m_glyph = font.glyph_for_char('m').is_some();
+
+                // HACK: The 'Segoe Fluent Icons' font does not have an 'm' glyph,
+                // but we need to be able to load it for rendering Windows icons in
+                // the Storybook (on macOS).
+                let is_segoe_fluent_icons = font.full_name() == "Segoe Fluent Icons";
+
+                if !has_m_glyph && !is_segoe_fluent_icons {
+                    // I spent far too long trying to track down why a font missing the 'm'
+                    // character wasn't loading. This log statement will hopefully save
+                    // someone else from suffering the same fate.
+                    log::warn!(
+                        "font '{}' has no 'm' character and was not loaded",
+                        font.full_name()
+                    );
+                    continue;
+                }
+            }
+
 
             let Some(postscript_name) = font.postscript_name() else {
                 log::warn!(
