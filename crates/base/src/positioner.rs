@@ -203,6 +203,30 @@ fn frame_insets(decorations: Decorations, client_inset: Pixels) -> Edges<Pixels>
     }
 }
 
+/// What the system draws over the window's edges (an iPad's status bar, home
+/// indicator and on-screen keyboard): popups stay clear of it. Desktop
+/// windows report none.
+pub fn system_insets(window: &Window) -> Edges<Pixels> {
+    let insets = window.insets();
+    let safe = insets.safe_area;
+    Edges {
+        top: safe.top,
+        right: safe.right,
+        bottom: safe.bottom.max(insets.ime.bottom),
+        left: safe.left,
+    }
+}
+
+/// Two sets of edge insets, side by side.
+pub fn add_edges(a: Edges<Pixels>, b: Edges<Pixels>) -> Edges<Pixels> {
+    Edges {
+        top: a.top + b.top,
+        right: a.right + b.right,
+        bottom: a.bottom + b.bottom,
+        left: a.left + b.left,
+    }
+}
+
 /// Resolves the bounds of a popup of `popup_size`.
 ///
 /// Side placement picks the preferred side when the popup fits, otherwise the
@@ -389,9 +413,12 @@ impl Element for Positioner {
         }
 
         let popup_size = (child_max - child_min).into();
-        let frame = frame_insets(
-            window.window_decorations(),
-            window.client_inset().unwrap_or(px(0.)),
+        let frame = add_edges(
+            frame_insets(
+                window.window_decorations(),
+                window.client_inset().unwrap_or(px(0.)),
+            ),
+            system_insets(window),
         );
         let mut strategy = self.strategy;
         if let (Strategy::Corner { position, .. }, Some(tracked)) =

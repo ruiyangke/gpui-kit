@@ -151,7 +151,7 @@ pub use pagination::{Pagination, PaginationItem, PaginationState};
 pub use plot::PlotMotion;
 pub use popover::{Popover, PopoverState};
 pub use popup::{POPUP_PRIORITY, Popup};
-pub use positioner::{Align, Positioner, ResolvedPosition};
+pub use positioner::{Align, Positioner, ResolvedPosition, add_edges, system_insets};
 pub use progress::{Progress, ProgressIndicator, ProgressTrack};
 pub use radio::{Radio, RadioStyles};
 pub use radio_group::RadioGroup;
