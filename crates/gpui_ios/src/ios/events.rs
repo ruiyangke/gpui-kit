@@ -1,12 +1,12 @@
 //! Conversion from UIKit events to GPUI input events.
 
 use gpui::{
-    BackGestureEvent, BackGesturePhase, Modifiers, Pixels, Point, ScrollDelta, ScrollEvent,
+    BackGestureEvent, BackGesturePhase, Keystroke, Modifiers, Pixels, Point, ScrollDelta, ScrollEvent,
     ScrollSource, TouchId, TouchPhase, px,
 };
 use objc2_core_foundation::CGPoint;
 use objc2_ui_kit::{
-    UIGestureRecognizerState, UIKeyModifierFlags, UIPanGestureRecognizer, UIRectEdge,
+    UIGestureRecognizerState, UIKey, UIKeyModifierFlags, UIPanGestureRecognizer, UIRectEdge,
     UIScreenEdgePanGestureRecognizer, UITouch, UITouchPhase, UIView,
 };
 
@@ -125,4 +125,62 @@ pub fn touch_force(touch: &UITouch) -> Option<f32> {
         return None;
     }
     Some((touch.force() / maximum_force).clamp(0.0, 1.0) as f32)
+}
+
+/// A hardware key as GPUI names it, or `None` for a modifier key alone.
+pub(super) fn keystroke(key: &UIKey) -> Option<Keystroke> {
+    let modifiers = modifiers(key.modifierFlags());
+    let usage = key.keyCode().0;
+    let named = match usage {
+        0x28 | 0x58 => Some("enter".to_owned()),
+        0x29 => Some("escape".to_owned()),
+        0x2A => Some("backspace".to_owned()),
+        0x2B => Some("tab".to_owned()),
+        0x2C => Some("space".to_owned()),
+        0x49 => Some("insert".to_owned()),
+        0x4A => Some("home".to_owned()),
+        0x4B => Some("pageup".to_owned()),
+        0x4C => Some("delete".to_owned()),
+        0x4D => Some("end".to_owned()),
+        0x4E => Some("pagedown".to_owned()),
+        0x4F => Some("right".to_owned()),
+        0x50 => Some("left".to_owned()),
+        0x51 => Some("down".to_owned()),
+        0x52 => Some("up".to_owned()),
+        0x3A..=0x45 => Some(format!("f{}", usage - 0x39)),
+        0xE0..=0xE7 => return None,
+        _ => None,
+    };
+    let typing = !modifiers.control && !modifiers.platform;
+    if let Some(name) = named {
+        let key_char = (typing && name == "space").then(|| " ".to_owned());
+        return Some(Keystroke { modifiers, key: name, key_char });
+    }
+    let key_name = key.charactersIgnoringModifiers().to_string().to_lowercase();
+    if key_name.is_empty() {
+        return None;
+    }
+    let characters = key.characters().to_string();
+    let key_char = (typing && !characters.chars().any(char::is_control) && !characters.is_empty())
+        .then_some(characters);
+    Some(Keystroke { modifiers, key: key_name, key_char })
+}
+
+/// Whether a hardware key belongs to the text system while a text field has
+/// the keyboard: characters typed without Control or Command, Return and
+/// Backspace (input methods compose from them). Everything else (arrows,
+/// Escape, Tab, function keys, shortcuts) goes to GPUI as a key event.
+pub(super) fn key_is_text(key: &UIKey) -> bool {
+    let flags = key.modifierFlags();
+    if flags.contains(UIKeyModifierFlags::Control) || flags.contains(UIKeyModifierFlags::Command) {
+        return false;
+    }
+    match key.keyCode().0 {
+        0x28 | 0x58 | 0x2A => true,
+        0x29 | 0x2B | 0x3A..=0x52 => false,
+        _ => {
+            let characters = key.characters().to_string();
+            !characters.is_empty() && !characters.chars().any(char::is_control)
+        }
+    }
 }

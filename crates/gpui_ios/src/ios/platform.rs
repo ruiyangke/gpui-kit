@@ -424,6 +424,10 @@ impl Platform for IosPlatform {
 
     fn read_from_clipboard(&self) -> Option<ClipboardItem> {
         let pasteboard = UIPasteboard::generalPasteboard();
+        // What the person pasted, saved when reading it needed no asking.
+        if let Some(text) = super::paste::saved_text(&pasteboard) {
+            return text.map(ClipboardItem::new_string);
+        }
         Some(ClipboardItem::new_string(
             unsafe { pasteboard.string() }?.to_string(),
         ))

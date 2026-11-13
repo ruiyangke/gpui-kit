@@ -14,7 +14,8 @@ use super::text_input::TextInputView;
 use super::{CallbackSlot, IosDisplay, platform::IosPlatformState};
 use gpui::{
     AnyWindowHandle, BackGestureEvent, BackGesturePhase, Bounds, Capslock, Corners, DevicePixels,
-    DispatchEventResult, DisplayId, Edges, GpuSpecs, Modifiers, Pixels, PlatformAtlas,
+    DispatchEventResult, DisplayId, Edges, GpuSpecs, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
+    Pixels, PlatformAtlas,
     PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PromptButton,
     PromptLevel, RequestFrameOptions, Scene, Size, TextInputConfiguration, TextInputStateChange,
     TouchEvent, TouchId, TouchPhase, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
@@ -25,7 +26,7 @@ use gpui_apple::{
     metal_renderer::{Context as MetalContext, MetalRenderer},
 };
 use objc2::rc::Retained;
-use objc2::runtime::{AnyClass, AnyObject, ProtocolObject};
+use objc2::runtime::{AnyClass, AnyObject, ProtocolObject, Sel};
 use objc2::{
     ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel,
 };
@@ -40,7 +41,7 @@ use objc2_ui_kit::{
 };
 use objc2_ui_kit::{
     UICornerConfiguration, UICornerRadius, UIEvent, UIGestureRecognizer,
-    UIGestureRecognizerDelegate, UIPanGestureRecognizer, UIRectCorner, UIRectEdge, UIScreen,
+    UIGestureRecognizerDelegate, UIKey, UIPanGestureRecognizer, UIPress, UIPressesEvent, UIRectCorner, UIRectEdge, UIScreen,
     UIScreenEdgePanGestureRecognizer, UIScrollTypeMask, UITouch, UITraitCollection,
     UITraitEnvironment, UIUserInterfaceLayoutDirection, UIUserInterfaceStyle, UIView,
     UIViewAutoresizing, UIViewController, UIWindow, UIWindowScene,
@@ -165,6 +166,40 @@ define_class!(
                         .with_window(IosWindowState::notify_appearance_changed);
                 }
             }
+        }
+
+
+        // A paste the person starts (⌘V, a menu) comes as UIKit's `paste:`:
+        // the pasteboard may be read without asking while it runs (`paste`).
+        #[unsafe(method(canPerformAction:withSender:))]
+        fn can_perform_action(&self, action: Sel, sender: Option<&AnyObject>) -> bool {
+            if action == sel!(paste:) {
+                super::paste::available()
+            } else {
+                unsafe { msg_send![super(self), canPerformAction: action, withSender: sender] }
+            }
+        }
+
+        #[unsafe(method(paste:))]
+        fn paste(&self, _sender: Option<&AnyObject>) {
+            super::paste::started();
+            self.ivars().with_window(|window| window.press_key_with("v", gpui::Modifiers::command()));
+        }
+
+        // Takes hardware keys while no text field has the keyboard.
+        #[unsafe(method(canBecomeFirstResponder))]
+        fn can_become_first_responder(&self) -> bool {
+            true
+        }
+
+        #[unsafe(method(pressesBegan:withEvent:))]
+        fn presses_began(&self, presses: &NSSet<UIPress>, _event: Option<&UIPressesEvent>) {
+            self.ivars().with_window(|window| window.presses(presses, true));
+        }
+
+        #[unsafe(method(pressesEnded:withEvent:))]
+        fn presses_ended(&self, presses: &NSSet<UIPress>, _event: Option<&UIPressesEvent>) {
+            self.ivars().with_window(|window| window.presses(presses, false));
         }
 
         #[unsafe(method(touchesBegan:withEvent:))]
@@ -536,6 +571,10 @@ impl IosWindowState {
     fn handle_touch_sample(&self, touch: &UITouch, id: TouchId) {
         let position = touch_location_in_view(touch, &self.view);
         self.mouse_position.set(position);
+        self.text_input_view.touched();
+        if matches!(touch_phase(touch), TouchPhase::Started) {
+            self.text_input_view.touch_began();
+        }
 
         let event = TouchEvent {
             id,
@@ -596,6 +635,85 @@ impl IosWindowState {
         }
         self.input_callback
             .with(|callback| callback(PlatformInput::BackGesture(event)));
+    }
+
+    /// Hardware keys going down or up, as GPUI key events.
+    pub(super) fn presses(&self, presses: &NSSet<UIPress>, down: bool) {
+        let Some(main_thread) = main_thread_marker() else {
+            return;
+        };
+        for press in presses.iter() {
+            if let Some(key) = press.key(main_thread) {
+                self.key_event(&key, down);
+            }
+        }
+    }
+
+    /// One hardware key going down or up, as a GPUI key event.
+    pub(super) fn key_event(&self, key: &UIKey, down: bool) {
+        let Some(mut keystroke) = super::events::keystroke(key) else {
+            return;
+        };
+        // The shortcuts bar's latched Control applies to the next key.
+        if down && self.text_input_view.take_control_latch() {
+            keystroke.modifiers.control = true;
+            keystroke.key_char = None;
+        }
+        self.modifiers.set(keystroke.modifiers);
+        let typed = keystroke.key_char.clone().filter(|_| down);
+        let input = if down {
+            PlatformInput::KeyDown(KeyDownEvent {
+                keystroke,
+                physical_key: None,
+                key_metadata: None,
+                is_held: false,
+                prefer_character_input: false,
+            })
+        } else {
+            PlatformInput::KeyUp(KeyUpEvent {
+                keystroke,
+                physical_key: None,
+                key_metadata: None,
+            })
+        };
+        let handled = self
+            .input_callback
+            .with(|callback| !callback(input).propagate)
+            .unwrap_or(false);
+        // As on a Mac: a character no binding took is typed into the focused
+        // field (a key pressed before the field took the keyboard).
+        if !handled && let Some(text) = typed {
+            self.text_input_view.type_text(&text);
+        }
+    }
+
+    /// Presses and releases `key` with no modifiers: a key the on-screen
+    /// keyboard sends that no text edit covers.
+    pub(super) fn press_key(&self, key: &str) {
+        self.press_key_with(key, Modifiers::default());
+    }
+
+    /// Presses and releases `key` with `modifiers`.
+    pub(super) fn press_key_with(&self, key: &str, modifiers: Modifiers) {
+        let keystroke = Keystroke {
+            modifiers,
+            key: key.to_owned(),
+            key_char: None,
+        };
+        self.input_callback.with(|callback| {
+            callback(PlatformInput::KeyDown(KeyDownEvent {
+                keystroke: keystroke.clone(),
+                physical_key: None,
+                key_metadata: None,
+                is_held: false,
+                prefer_character_input: false,
+            }));
+            callback(PlatformInput::KeyUp(KeyUpEvent {
+                keystroke,
+                physical_key: None,
+                key_metadata: None,
+            }));
+        });
     }
 
     fn handle_keyboard_dismiss_touch(&self, event: &TouchEvent) {

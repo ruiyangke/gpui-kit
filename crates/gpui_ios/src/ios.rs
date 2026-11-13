@@ -4,9 +4,12 @@ mod application;
 mod display;
 mod document_picker;
 mod events;
+mod paste;
 mod platform;
 mod text_input;
 mod window;
+
+pub use paste::PASTE_NOTIFICATION;
 
 use std::cell::{Cell, RefCell};
 

@@ -4,12 +4,12 @@ use gpui::{
     TextInputStateChange, px,
 };
 use objc2::rc::{Retained, Weak};
-use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{
     NSArray, NSAttributedStringKey, NSComparisonResult, NSCopying, NSDictionary,
-    NSObjectNSDelayedPerforming, NSObjectProtocol, NSRange, NSString,
+    NSObjectNSDelayedPerforming, NSObjectProtocol, NSRange, NSSet, NSString,
 };
 use objc2_ui_kit::*;
 use std::{
@@ -21,6 +21,20 @@ use std::{
 struct TextPositionIvars {
     offset: usize,
     session: Rc<()>,
+}
+
+// GCKeyboard tells whether a hardware keyboard is attached.
+#[link(name = "GameController", kind = "framework")]
+unsafe extern "C" {}
+
+/// Whether a hardware keyboard is attached: it needs the field to take keys
+/// and shows no on-screen keyboard.
+fn hardware_keyboard() -> bool {
+    objc2::runtime::AnyClass::get(c"GCKeyboard").is_some_and(|class| {
+        // SAFETY: a class method returning an optional object, on the main thread.
+        let keyboard: *mut AnyObject = unsafe { msg_send![class, coalescedKeyboard] };
+        !keyboard.is_null()
+    })
 }
 
 define_class!(
@@ -124,7 +138,21 @@ pub(super) struct TextInputIvars {
     selection_changed: Cell<bool>,
     content_changed: Cell<bool>,
     native_edit: Cell<bool>,
+    /// The focused text's document and selection when a touch began with
+    /// the keyboard down, and how many checks after it remain.
+    tap_text: RefCell<Option<TextSignature>>,
+    tap_checks: Cell<u8>,
+    /// When a finger or pointer last touched this view's window.
+    touched_at: Cell<Option<std::time::Instant>>,
+    /// The shortcuts bar's own leading groups, while terminal keys replace them.
+    default_bar: RefCell<Option<Retained<NSArray<UIBarButtonItemGroup>>>>,
+    /// The terminal keys' Control, and whether it applies to the next key.
+    control_item: RefCell<Option<Retained<UIBarButtonItem>>>,
+    control_latched: Cell<bool>,
 }
+
+/// A focused text field's document and selection ranges.
+type TextSignature = Option<(Range<usize>, Range<usize>)>;
 
 define_class!(
     #[unsafe(super = UIView)]
@@ -142,6 +170,45 @@ define_class!(
                 && self.ivars().keyboard_eligible.get()
         }
 
+
+        // A paste the person starts (⌘V, a menu) comes as UIKit's `paste:`:
+        // the pasteboard may be read without asking while it runs (`paste`).
+        #[unsafe(method(canPerformAction:withSender:))]
+        fn can_perform_action(&self, action: Sel, sender: Option<&AnyObject>) -> bool {
+            if action == sel!(paste:) {
+                super::paste::available()
+            } else {
+                unsafe { msg_send![super(self), canPerformAction: action, withSender: sender] }
+            }
+        }
+
+        #[unsafe(method(paste:))]
+        fn paste(&self, _sender: Option<&AnyObject>) {
+            super::paste::started();
+            self.ivars().window.with_window(|window| window.press_key_with("v", gpui::Modifiers::command()));
+        }
+
+        // Keys that aren't text (arrows, Escape, Tab, shortcuts) go to GPUI
+        // as key events; text goes through UIKit's text system, which input
+        // methods compose with.
+        #[unsafe(method(pressesBegan:withEvent:))]
+        fn presses_began(&self, presses: &NSSet<UIPress>, event: Option<&UIPressesEvent>) {
+            if !self.forward_presses(presses, true) {
+                unsafe {
+                    let _: () = msg_send![super(self), pressesBegan: presses, withEvent: event];
+                }
+            }
+        }
+
+        #[unsafe(method(pressesEnded:withEvent:))]
+        fn presses_ended(&self, presses: &NSSet<UIPress>, event: Option<&UIPressesEvent>) {
+            if !self.forward_presses(presses, false) {
+                unsafe {
+                    let _: () = msg_send![super(self), pressesEnded: presses, withEvent: event];
+                }
+            }
+        }
+
         #[unsafe(method(resignFirstResponder))]
         fn resign_first_responder(&self) -> bool {
             let was_first_responder = self.isFirstResponder();
@@ -153,6 +220,60 @@ define_class!(
                 self.ivars().keyboard_eligible.set(false);
             }
             resigned
+        }
+
+        /// A moment after a touch: a caret it placed in a text field (the
+        /// focused text changed) brings up the keyboard. Remote windows keep
+        /// one GPUI focus for all their fields, so no focus change says so.
+        #[unsafe(method(escapeKey:))]
+        fn escape_key(&self, _sender: Option<&AnyObject>) {
+            self.bar_key("escape");
+        }
+
+        #[unsafe(method(tabKey:))]
+        fn tab_key(&self, _sender: Option<&AnyObject>) {
+            self.bar_key("tab");
+        }
+
+        #[unsafe(method(leftKey:))]
+        fn left_key(&self, _sender: Option<&AnyObject>) {
+            self.bar_key("left");
+        }
+
+        #[unsafe(method(downKey:))]
+        fn down_key(&self, _sender: Option<&AnyObject>) {
+            self.bar_key("down");
+        }
+
+        #[unsafe(method(upKey:))]
+        fn up_key(&self, _sender: Option<&AnyObject>) {
+            self.bar_key("up");
+        }
+
+        #[unsafe(method(rightKey:))]
+        fn right_key(&self, _sender: Option<&AnyObject>) {
+            self.bar_key("right");
+        }
+
+        #[unsafe(method(controlKey:))]
+        fn control_key(&self, _sender: Option<&AnyObject>) {
+            self.set_control_latched(!self.ivars().control_latched.get());
+        }
+
+        #[unsafe(method(checkTapFocus))]
+        fn check_tap_focus(&self) {
+            let checks = self.ivars().tap_checks.get().saturating_sub(1);
+            self.ivars().tap_checks.set(checks);
+            let Some(before) = self.ivars().tap_text.borrow().clone() else { return };
+            let now = self.text_signature();
+            if self.ivars().keyboard_desired.get() || (now.is_some() && now != before) {
+                self.ivars().tap_text.replace(None);
+                if !self.ivars().keyboard_desired.get() {
+                    self.set_keyboard_visible(true);
+                }
+            } else if checks == 0 {
+                self.ivars().tap_text.replace(None);
+            }
         }
 
         #[unsafe(method(reconcileTextInput))]
@@ -168,10 +289,18 @@ define_class!(
             self.ivars().keyboard_eligible.set(eligible);
             if self.canBecomeFirstResponder() {
                 if !self.isFirstResponder() { self.becomeFirstResponder(); }
+                // Hardware keys go to the key window's first responder.
+                if let Some(window) = self.window() && !window.isKeyWindow() {
+                    window.makeKeyWindow();
+                }
             } else if self.isFirstResponder() {
                 let previous = self.ivars().reconciling_responder.replace(true);
                 self.resignFirstResponder();
                 self.ivars().reconciling_responder.set(previous);
+                // Hardware keys go back to GPUI's view.
+                if let Some(view) = self.superview() {
+                    view.becomeFirstResponder();
+                }
             }
             if self.ivars().configuration_changed.replace(false) && self.isFirstResponder() {
                 self.reloadInputViews();
@@ -200,10 +329,17 @@ define_class!(
         }
         #[unsafe(method(insertText:))]
         fn insert_text(&self, text: &NSString) {
-            self.edit(|handler| handler.replace_text_in_range(None, &text.to_string()));
+            let text = text.to_string();
+            // A latched Control applies to the next key typed.
+            if self.ivars().control_latched.get() && text.chars().count() == 1 {
+                self.bar_key(&text.to_lowercase());
+                return;
+            }
+            self.edit(|handler| handler.replace_text_in_range(None, &text));
         }
         #[unsafe(method(deleteBackward))]
         fn delete_backward(&self) {
+            let mut deleted = false;
             self.edit(|handler| {
                 let Some(selection) = handler.selected_text_range(false) else { return; };
                 let mut range = selection.range;
@@ -216,8 +352,15 @@ define_class!(
                 }
                 if allowed_range(handler, &range) {
                     handler.replace_text_in_range(Some(range), "");
+                    deleted = true;
                 }
             });
+            // Nothing here to delete: the field may hold text this view
+            // doesn't see (a remote app's), so it gets the key, as from a
+            // hardware keyboard.
+            if !deleted {
+                self.ivars().window.with_window(|window| window.press_key("backspace"));
+            }
         }
     }
 
@@ -245,6 +388,20 @@ define_class!(
         fn inline_prediction_type(&self) -> UITextInlinePredictionType {
             if self.ivars().configuration.borrow().suggestions { UITextInlinePredictionType::Yes } else { UITextInlinePredictionType::No }
         }
+        // Text assistance off also means no smart punctuation: a terminal or
+        // code field needs the quotes and dashes that were typed.
+        #[unsafe(method(smartQuotesType))]
+        fn smart_quotes_type(&self) -> UITextSmartQuotesType {
+            if self.ivars().configuration.borrow().autocorrect { UITextSmartQuotesType::Yes } else { UITextSmartQuotesType::No }
+        }
+        #[unsafe(method(smartDashesType))]
+        fn smart_dashes_type(&self) -> UITextSmartDashesType {
+            if self.ivars().configuration.borrow().autocorrect { UITextSmartDashesType::Yes } else { UITextSmartDashesType::No }
+        }
+        #[unsafe(method(smartInsertDeleteType))]
+        fn smart_insert_delete_type(&self) -> UITextSmartInsertDeleteType {
+            if self.ivars().configuration.borrow().autocorrect { UITextSmartInsertDeleteType::Yes } else { UITextSmartInsertDeleteType::No }
+        }
         #[unsafe(method(returnKeyType))]
         fn return_key_type(&self) -> UIReturnKeyType {
             match self.ivars().configuration.borrow().input_action {
@@ -260,14 +417,14 @@ define_class!(
 
     unsafe impl UITextInput for TextInputView {
         #[unsafe(method_id(textInRange:))]
-        fn text_in_range(&self, range: &UITextRange) -> Option<Retained<NSString>> {
+        fn text_in_range(&self, range: Option<&UITextRange>) -> Option<Retained<NSString>> {
             (|| {
             let range = self.validated_range(range)?;
             self.with_handler(|handler| read_text(handler, range)).flatten()
             })()
         }
         #[unsafe(method(replaceRange:withText:))]
-        fn replace_range(&self, range: &UITextRange, text: &NSString) {
+        fn replace_range(&self, range: Option<&UITextRange>, text: &NSString) {
             if let Some(range) = self.validated_range(range) {
                 self.edit(|handler| {
                     if allowed_range(handler, &range) {
@@ -285,7 +442,7 @@ define_class!(
         }
         #[unsafe(method(setSelectedTextRange:))]
         fn set_selected_text_range(&self, range: Option<&UITextRange>) {
-            if let Some(range) = range.and_then(|range| self.validated_range(range)) {
+            if let Some(range) = self.validated_range(range) {
                 self.edit(|handler| {
                     if allowed_range(handler, &range) { handler.set_selected_text_range(range); }
                 });
@@ -323,7 +480,7 @@ define_class!(
             self.new_position(self.document_range().map_or(0, |range| range.end))
         }
         #[unsafe(method_id(textRangeFromPosition:toPosition:))]
-        fn text_range(&self, start: &UITextPosition, end: &UITextPosition) -> Option<Retained<UITextRange>> {
+        fn text_range(&self, start: Option<&UITextPosition>, end: Option<&UITextPosition>) -> Option<Retained<UITextRange>> {
             (|| {
             let start = self.validated_offset(start)?;
             let end = self.validated_offset(end)?;
@@ -331,7 +488,7 @@ define_class!(
             })()
         }
         #[unsafe(method_id(positionFromPosition:offset:))]
-        fn position_offset(&self, position: &UITextPosition, offset: isize) -> Option<Retained<UITextPosition>> {
+        fn position_offset(&self, position: Option<&UITextPosition>, offset: isize) -> Option<Retained<UITextPosition>> {
             (|| {
             let position = self.validated_offset(position)?;
             let range = self.document_range()?;
@@ -340,9 +497,10 @@ define_class!(
             })()
         }
         #[unsafe(method_id(positionFromPosition:inDirection:offset:))]
-        fn position_direction(&self, position: &UITextPosition, direction: UITextLayoutDirection, offset: isize) -> Option<Retained<UITextPosition>> {
+        fn position_direction(&self, position: Option<&UITextPosition>, direction: UITextLayoutDirection, offset: isize) -> Option<Retained<UITextPosition>> {
             (|| {
             self.validated_offset(position)?;
+            let position = position?;
             if direction == UITextLayoutDirection::Left {
                 return self.positionFromPosition_offset(position, offset.checked_neg()?);
             }
@@ -355,7 +513,7 @@ define_class!(
             })()
         }
         #[unsafe(method(comparePosition:toPosition:))]
-        fn compare_position(&self, position: &UITextPosition, other: &UITextPosition) -> NSComparisonResult {
+        fn compare_position(&self, position: Option<&UITextPosition>, other: Option<&UITextPosition>) -> NSComparisonResult {
             let (Some(position), Some(other)) = (self.validated_offset(position), self.validated_offset(other)) else {
                 return NSComparisonResult::Same;
             };
@@ -366,7 +524,7 @@ define_class!(
             }
         }
         #[unsafe(method(offsetFromPosition:toPosition:))]
-        fn offset_from_position(&self, start: &UITextPosition, end: &UITextPosition) -> isize {
+        fn offset_from_position(&self, start: Option<&UITextPosition>, end: Option<&UITextPosition>) -> isize {
             let (Some(start), Some(end)) = (
                 self.validated_offset(start).and_then(|offset| isize::try_from(offset).ok()),
                 self.validated_offset(end).and_then(|offset| isize::try_from(offset).ok()),
@@ -385,7 +543,7 @@ define_class!(
             ProtocolObject::from_retained(tokenizer)
         }
         #[unsafe(method_id(positionWithinRange:farthestInDirection:))]
-        fn farthest_position(&self, range: &UITextRange, direction: UITextLayoutDirection) -> Option<Retained<UITextPosition>> {
+        fn farthest_position(&self, range: Option<&UITextRange>, direction: UITextLayoutDirection) -> Option<Retained<UITextPosition>> {
             (|| {
             let range = self.validated_range(range)?;
             let offset = if direction == UITextLayoutDirection::Left || direction == UITextLayoutDirection::Up { range.start } else { range.end };
@@ -393,7 +551,7 @@ define_class!(
             })()
         }
         #[unsafe(method_id(characterRangeByExtendingPosition:inDirection:))]
-        fn extending_range(&self, position: &UITextPosition, direction: UITextLayoutDirection) -> Option<Retained<UITextRange>> {
+        fn extending_range(&self, position: Option<&UITextPosition>, direction: UITextLayoutDirection) -> Option<Retained<UITextRange>> {
             (|| {
             let offset = self.validated_offset(position)?;
             let backwards = direction == UITextLayoutDirection::Left || direction == UITextLayoutDirection::Up;
@@ -401,30 +559,30 @@ define_class!(
             })()
         }
         #[unsafe(method(baseWritingDirectionForPosition:inDirection:))]
-        fn base_writing_direction(&self, position: &UITextPosition, _direction: UITextStorageDirection) -> NSWritingDirection {
+        fn base_writing_direction(&self, position: Option<&UITextPosition>, _direction: UITextStorageDirection) -> NSWritingDirection {
             if self.validated_offset(position).is_none() { return NSWritingDirection::Natural; }
             NSWritingDirection::Natural
         }
         #[unsafe(method(setBaseWritingDirection:forRange:))]
-        fn set_base_writing_direction(&self, direction: NSWritingDirection, range: &UITextRange) {
+        fn set_base_writing_direction(&self, direction: NSWritingDirection, range: Option<&UITextRange>) {
             if self.validated_range(range).is_none() { return; }
             if direction != NSWritingDirection::Natural {
                 log::warn!("GPUI input handlers do not support overriding paragraph writing direction");
             }
         }
         #[unsafe(method(firstRectForRange:))]
-        fn first_rect(&self, range: &UITextRange) -> CGRect {
+        fn first_rect(&self, range: Option<&UITextRange>) -> CGRect {
             self.validated_range(range).and_then(|range| self.bounds(range)).unwrap_or(CGRect::ZERO)
         }
         #[unsafe(method(caretRectForPosition:))]
-        fn caret_rect(&self, position: &UITextPosition) -> CGRect {
+        fn caret_rect(&self, position: Option<&UITextPosition>) -> CGRect {
             self.validated_offset(position)
                 .and_then(|offset| self.bounds(offset..offset))
                 .map(nonempty_caret_rect)
                 .unwrap_or(CGRect::ZERO)
         }
         #[unsafe(method_id(selectionRectsForRange:))]
-        fn selection_rects(&self, range: &UITextRange) -> Retained<NSArray<UITextSelectionRect>> {
+        fn selection_rects(&self, range: Option<&UITextRange>) -> Retained<NSArray<UITextSelectionRect>> {
             (|| {
             let Some(range) = self.validated_range(range) else { return NSArray::new(); };
             let bounds = self.with_handler(|handler| {
@@ -453,18 +611,18 @@ define_class!(
                 .map(|offset| self.new_position(offset))
         }
         #[unsafe(method_id(closestPositionToPoint:withinRange:))]
-        fn closest_position_within_range(&self, point: CGPoint, range: &UITextRange) -> Option<Retained<UITextPosition>> {
+        fn closest_position_within_range(&self, point: CGPoint, range: Option<&UITextRange>) -> Option<Retained<UITextPosition>> {
             (|| {
             let range = self.validated_range(range)?;
             let position = self.closestPositionToPoint(point)?;
-            Some(self.new_position(self.validated_offset(&position)?.clamp(range.start, range.end)))
+            Some(self.new_position(self.validated_offset(Some(&position))?.clamp(range.start, range.end)))
             })()
         }
         #[unsafe(method_id(characterRangeAtPoint:))]
         fn character_range_at_point(&self, point: CGPoint) -> Option<Retained<UITextRange>> {
             (|| {
                 let position = self.closestPositionToPoint(point)?;
-                self.character_range(self.validated_offset(&position)?)
+                self.character_range(self.validated_offset(Some(&position))?)
             })()
         }
         #[unsafe(method_id(textInputView))]
@@ -494,6 +652,12 @@ impl TextInputView {
             selection_changed: Cell::new(false),
             content_changed: Cell::new(false),
             native_edit: Cell::new(false),
+            tap_text: RefCell::new(None),
+            tap_checks: Cell::new(0),
+            touched_at: Cell::new(None),
+            default_bar: RefCell::new(None),
+            control_item: RefCell::new(None),
+            control_latched: Cell::new(false),
         });
         unsafe { msg_send![super(this), initWithFrame: frame] }
     }
@@ -502,14 +666,14 @@ impl TextInputView {
         *self.ivars().window.0.borrow_mut() = window;
     }
 
-    fn validated_offset(&self, position: &UITextPosition) -> Option<usize> {
-        let position = position.downcast_ref::<TextPosition>()?;
+    fn validated_offset(&self, position: Option<&UITextPosition>) -> Option<usize> {
+        let position = position?.downcast_ref::<TextPosition>()?;
         Rc::ptr_eq(&position.ivars().session, &self.ivars().session.borrow())
             .then_some(position.ivars().offset)
     }
 
-    fn validated_range(&self, range: &UITextRange) -> Option<Range<usize>> {
-        let range = range.downcast_ref::<TextRange>()?;
+    fn validated_range(&self, range: Option<&UITextRange>) -> Option<Range<usize>> {
+        let range = range?.downcast_ref::<TextRange>()?;
         Rc::ptr_eq(&range.ivars().session, &self.ivars().session.borrow())
             .then(|| range.ivars().range.clone())
     }
@@ -533,6 +697,85 @@ impl TextInputView {
             .window
             .with_window(|window| window.with_input_handler(callback))
             .flatten()
+    }
+
+    /// Puts Escape, Control, Tab and the arrows on the keyboard's shortcuts
+    /// bar, in place of its own leading items, or gives those back.
+    fn set_terminal_keys(&self, terminal: bool) {
+        let assistant = self.inputAssistantItem();
+        if !terminal {
+            if let Some(groups) = self.ivars().default_bar.take() {
+                assistant.setLeadingBarButtonGroups(&groups);
+            }
+            self.set_control_latched(false);
+            self.ivars().control_item.replace(None);
+            return;
+        }
+        if self.ivars().default_bar.borrow().is_none() {
+            self.ivars().default_bar.replace(Some(assistant.leadingBarButtonGroups()));
+        }
+        let main_thread = MainThreadMarker::from(self);
+        let target: &AnyObject = self.as_ref();
+        let item = |title: &str, action: objc2::runtime::Sel| unsafe {
+            UIBarButtonItem::initWithTitle_style_target_action(
+                UIBarButtonItem::alloc(main_thread),
+                Some(&NSString::from_str(title)),
+                UIBarButtonItemStyle::Plain,
+                Some(target),
+                Some(action),
+            )
+        };
+        let control = item("ctrl", sel!(controlKey:));
+        let items = [
+            item("esc", sel!(escapeKey:)),
+            control.clone(),
+            item("tab", sel!(tabKey:)),
+            item("\u{2190}", sel!(leftKey:)),
+            item("\u{2193}", sel!(downKey:)),
+            item("\u{2191}", sel!(upKey:)),
+            item("\u{2192}", sel!(rightKey:)),
+        ];
+        let group = UIBarButtonItemGroup::initWithBarButtonItems_representativeItem(
+            UIBarButtonItemGroup::alloc(main_thread),
+            &NSArray::from_retained_slice(&items),
+            None,
+        );
+        assistant.setLeadingBarButtonGroups(&NSArray::from_retained_slice(&[group]));
+        self.ivars().control_item.replace(Some(control));
+    }
+
+    /// Releases a latched Control, saying whether it was latched.
+    pub(super) fn take_control_latch(&self) -> bool {
+        let latched = self.ivars().control_latched.get();
+        if latched {
+            self.set_control_latched(false);
+        }
+        latched
+    }
+
+    fn set_control_latched(&self, latched: bool) {
+        self.ivars().control_latched.set(latched);
+        if let Some(item) = self.ivars().control_item.borrow().as_ref() {
+            item.setSelected(latched);
+        }
+    }
+
+    /// A key from the shortcuts bar, or one a latched Control applies to.
+    fn bar_key(&self, key: &str) {
+        let control = self.ivars().control_latched.get();
+        self.set_control_latched(false);
+        let modifiers = gpui::Modifiers {
+            control,
+            ..Default::default()
+        };
+        self.ivars()
+            .window
+            .with_window(|window| window.press_key_with(key, modifiers));
+    }
+
+    /// Types `text` into the focused field, as the keyboard would.
+    pub(super) fn type_text(&self, text: &str) {
+        self.edit(|handler| handler.replace_text_in_range(None, text));
     }
 
     fn edit(&self, callback: impl FnOnce(&mut PlatformInputHandler)) {
@@ -582,6 +825,73 @@ impl TextInputView {
         .flatten()
     }
 
+    /// A touch began in this view's window.
+    /// Sends presses whose keys aren't text to GPUI; returns false, sending
+    /// none, if any of them is text.
+    fn forward_presses(&self, presses: &NSSet<UIPress>, down: bool) -> bool {
+        let main_thread = MainThreadMarker::from(self);
+        let mut keys = Vec::new();
+        for press in presses.iter() {
+            match press.key(main_thread) {
+                Some(key) if !super::events::key_is_text(&key) => keys.push(key),
+                _ => return false,
+            }
+        }
+        self.ivars()
+            .window
+            .with_window(|window| {
+                for key in &keys {
+                    window.key_event(key, down);
+                }
+            })
+            .is_some()
+    }
+
+    /// A finger or pointer touched this view's window.
+    pub(super) fn touched(&self) {
+        self.ivars().touched_at.set(Some(std::time::Instant::now()));
+    }
+
+    /// Whether focus reaching a text field should bring up the keyboard: the
+    /// person just touched this window (a tap that focused it, here or in a
+    /// remote app, whose focus arrives a moment later) or types on a hardware
+    /// keyboard. Focus an app moves on its own (a window opening with a field
+    /// focused, after a tap in another window) leaves it down.
+    fn person_wants_keyboard(&self) -> bool {
+        let touched = self
+            .ivars()
+            .touched_at
+            .get()
+            .is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(1500));
+        touched || hardware_keyboard()
+    }
+
+    pub(super) fn touch_began(&self) {
+        if self.ivars().keyboard_desired.get() {
+            return;
+        }
+        self.ivars().tap_text.replace(Some(self.text_signature()));
+        self.ivars().tap_checks.set(2);
+        // Remote apps take a round trip to move their focus.
+        for delay in [0.4, 1.2] {
+            unsafe {
+                self.performSelector_withObject_afterDelay(sel!(checkTapFocus), None, delay);
+            }
+        }
+    }
+
+    fn text_signature(&self) -> TextSignature {
+        self.with_handler(|handler| {
+            if !handler.query_accepts_focused_text_input() {
+                return None;
+            }
+            let document = document_range(handler)?;
+            let selection = handler.selected_text_range(false)?.range;
+            Some((document, selection))
+        })
+        .flatten()
+    }
+
     pub(super) fn set_keyboard_visible(&self, visible: bool) {
         self.ivars().keyboard_desired.set(visible);
         self.refresh_keyboard();
@@ -595,7 +905,9 @@ impl TextInputView {
             if field.is_some() {
                 self.ivars().content_changed.set(true);
                 self.ivars().selection_changed.set(true);
-                self.set_keyboard_visible(true);
+                if self.isFirstResponder() || self.person_wants_keyboard() {
+                    self.set_keyboard_visible(true);
+                }
             }
         }
     }
@@ -616,6 +928,9 @@ impl TextInputView {
         if *self.ivars().configuration.borrow() == *configuration {
             return;
         }
+        if self.ivars().configuration.borrow().terminal_keys != configuration.terminal_keys {
+            self.set_terminal_keys(configuration.terminal_keys);
+        }
         *self.ivars().configuration.borrow_mut() = configuration.clone();
         self.ivars().configuration_changed.set(true);
         self.refresh_keyboard();
@@ -626,7 +941,9 @@ impl TextInputView {
             TextInputStateChange::FocusGained => {
                 self.ivars().content_changed.set(true);
                 self.ivars().selection_changed.set(true);
-                self.set_keyboard_visible(true);
+                if self.isFirstResponder() || self.person_wants_keyboard() {
+                    self.set_keyboard_visible(true);
+                }
             }
             TextInputStateChange::FocusLost => {
                 self.invalidate_session();
@@ -640,6 +957,16 @@ impl TextInputView {
                 self.ivars().selection_changed.set(true);
                 if matches!(change, TextInputStateChange::ContentChanged) {
                     self.ivars().content_changed.set(true);
+                }
+                // A tap that moved the caret into a field that already had
+                // focus (another field of the same remote window, or one whose
+                // focus arrived untouched) brings up the keyboard.
+                if matches!(change, TextInputStateChange::SelectionChanged)
+                    && !self.ivars().keyboard_desired.get()
+                    && self.ivars().input_field.get().is_some()
+                    && self.person_wants_keyboard()
+                {
+                    self.ivars().keyboard_desired.set(true);
                 }
                 self.refresh_keyboard();
             }
@@ -882,6 +1209,7 @@ pub(super) mod tests {
             autocapitalize: Autocapitalize::Sentences,
             suggestions: true,
             input_action: TextInputAction::Search,
+            terminal_keys: false,
         });
         assert_eq!(view.autocorrectionType(), UITextAutocorrectionType::Yes);
         assert_eq!(

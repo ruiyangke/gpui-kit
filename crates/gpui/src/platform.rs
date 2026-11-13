@@ -2745,6 +2745,10 @@ pub struct TextInputConfiguration {
     pub suggestions: bool,
     /// The action advertised on a software keyboard's confirm ("enter") key.
     pub input_action: TextInputAction,
+    /// Whether software keyboards offer the keys a terminal needs that text
+    /// fields don't (Escape, Control, Tab, arrows), for input that takes key
+    /// presses rather than text.
+    pub terminal_keys: bool,
 }
 
 /// Automatic capitalization applied by software keyboards.
